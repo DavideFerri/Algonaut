@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
-from .constants import TicketPriority, TicketStatus, ProgrammingLanguage
+from lib.jira_to_pr.constants import TicketPriority, TicketStatus, ProgrammingLanguage
 
 
 class TicketData(BaseModel):

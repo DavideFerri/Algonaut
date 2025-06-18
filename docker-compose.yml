@@ -14,10 +14,14 @@ services:
       - .env
     environment:
       - PUBLIC_ENV=dev
+      - PYTHONPATH=/usr/app
     volumes:
       - ./src:/usr/app/src
-      - ./tests:/usr/app/tests
       - ./.env:/usr/app/.env
+      # Persistent volumes for jira-to-pr automation
+      - jira_repos:/tmp/repos
+      - jira_cache:/tmp/cache
+      - jira_logs:/tmp/logs
     networks:
       - network
     profiles:
@@ -45,28 +49,44 @@ services:
     profiles:
       - dev
 
-  test:
+  # Jira-to-PR automation service (optional standalone service)
+  jira-to-pr:
     build:
       context: .
-      dockerfile: Dockerfile.local-test
+      dockerfile: Dockerfile.dev
       args:
         TAMARIX_GITHUB_TOKEN: ${GITHUB_TOKEN}
-    container_name: tests
+    container_name: jira-to-pr
     env_file:
       - .env
     environment:
-      - PUBLIC_ENV=test
+      - PUBLIC_ENV=dev
       - PYTHONPATH=/usr/app
     volumes:
       - ./src:/usr/app/src:ro
-      - ./tests:/usr/app/tests:ro
       - ./.env:/usr/app/.env:ro
-      - ./htmlcov:/usr/app/htmlcov
+      # Persistent volumes for automation data
+      - jira_repos:/tmp/repos
+      - jira_cache:/tmp/cache
+      - jira_logs:/tmp/logs
     networks:
       - network
+    # Override the default command to run jira-to-pr automation
+    command: python -m src.lib.jira_to_pr.main --max-tickets ${MAX_TICKETS_PER_RUN:-5}
     profiles:
-      - test
+      - automation
+    depends_on:
+      - app
 
 networks:
   network:
     driver: bridge
+
+# Persistent volumes for jira-to-pr automation data
+volumes:
+  jira_repos:
+    driver: local
+  jira_cache:
+    driver: local
+  jira_logs:
+    driver: local

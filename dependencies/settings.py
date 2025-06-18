@@ -2,7 +2,8 @@
 
 import os
 from typing import Optional
-from pydantic import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -29,6 +30,10 @@ class Settings(BaseSettings):
     github_org: Optional[str] = Field(None, env="GITHUB_ORG")
     github_user: Optional[str] = Field(None, env="GITHUB_USER")
     
+    # Git Configuration for automated commits
+    git_user_name: str = Field(default="Jira-to-PR Automation", env="GIT_USER_NAME")
+    git_user_email: str = Field(default="automation@company.com", env="GIT_USER_EMAIL")
+    
     # Workflow Settings
     max_tickets_per_run: int = Field(default=5, env="MAX_TICKETS_PER_RUN")
     max_repositories_per_ticket: int = Field(default=3, env="MAX_REPOS_PER_TICKET") 
@@ -51,6 +56,24 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4o", env="OPENAI_MODEL")
     openai_temperature: float = Field(default=0.0, env="OPENAI_TEMPERATURE")
     claude_model: str = Field(default="claude-3-sonnet-20240229", env="CLAUDE_MODEL")
+    
+    # Application Configuration
+    debug: bool = Field(default=False, env="DEBUG")
+    log_level: str = Field(default="INFO", env="LOG_LEVEL")
+    log_dir: str = Field(default="/tmp/logs", env="LOG_DIR")
+    pythonpath: str = Field(default="/usr/app", env="PYTHONPATH")
+    
+    # Extended Workflow Configuration
+    max_repos_per_ticket: int = Field(default=3, env="MAX_REPOS_PER_TICKET")
+    auto_assign_pr: bool = Field(default=False, env="AUTO_ASSIGN_PR")
+    
+    # Extended Security Configuration
+    allowed_file_extensions: str = Field(default=".py,.js,.ts,.java,.go,.rs,.cpp,.h,.hpp,.cs", env="ALLOWED_FILE_EXTENSIONS")
+    forbidden_paths: str = Field(default="/etc/,/usr/,/bin/,/sbin/,/root/,.env,.secret", env="FORBIDDEN_PATHS")
+    
+    # Extended Storage Configuration
+    cache_ttl_hours: int = Field(default=24, env="CACHE_TTL_HOURS")
+    cleanup_on_exit: bool = Field(default=True, env="CLEANUP_ON_EXIT")
     
     class Config:
         env_file = ".env"

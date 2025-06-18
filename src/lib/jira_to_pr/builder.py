@@ -4,8 +4,8 @@ from datetime import datetime
 from langgraph.constants import START
 from langgraph.graph import StateGraph
 
-from .models import JiraToPRState
-from .nodes import (
+from lib.jira_to_pr.models import JiraToPRState
+from lib.jira_to_pr.nodes import (
     fetch_jira_tickets,
     select_ticket,
     analyze_repositories,
@@ -13,7 +13,7 @@ from .nodes import (
     create_pull_requests,
     cleanup_state,
 )
-from .edges import (
+from lib.jira_to_pr.edges import (
     tickets_or_end,
     analyze_or_error,
     generate_or_error,

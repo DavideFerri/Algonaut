@@ -7,7 +7,7 @@ from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.constants import END
 
-from .models import JiraToPRState
+from lib.jira_to_pr.models import JiraToPRState
 
 
 # Initialize LLM for decision making

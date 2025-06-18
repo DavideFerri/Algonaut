@@ -5,16 +5,41 @@ COPY src/requirements.txt requirements.txt
 
 ARG TAMARIX_GITHUB_TOKEN
 ENV TAMARIX_GITHUB_TOKEN=${TAMARIX_GITHUB_TOKEN}
+
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
 RUN pip install --upgrade "langgraph-cli[inmem]"
 
+# Install Claude Code CLI (required for claude-code-sdk)
+RUN npm install -g @anthropic-ai/claude-code
+
+# Install MCP servers for Jira and GitHub integration
+RUN npm install -g @sooperset/mcp-atlassian @modelcontextprotocol/server-github
+
+# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     poppler-utils \
-    default-jre && \
+    default-jre \
+    git \
+    curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Git will be configured at runtime using environment variables
+# GIT_USER_NAME and GIT_USER_EMAIL
+
+# Create necessary directories for jira-to-pr automation
+RUN mkdir -p /tmp/jira-to-pr /tmp/repos /tmp/cache /tmp/logs
+
 COPY . .
+
+# Set environment variables
 ENV PUBLIC_ENV=dev
+ENV PYTHONPATH=/usr/app
+
+# Expose ports
+EXPOSE 2024
+
+# Default command - can be overridden in docker-compose
 CMD langgraph dev --allow-blocking --host 0.0.0.0 --port 2024

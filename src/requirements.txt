@@ -9,12 +9,17 @@ pydantic>=2.0.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 
-# External API clients for Jira-to-PR automation
-atlassian-python-api>=3.41.0
-PyGithub>=1.59.0
+# MCP client for external service integration
+mcp>=1.0.0
 httpx>=0.24.0
 
-# Optional: Claude API integration
+# Backup API clients (if MCP unavailable)
+PyGithub>=1.59.0
+
+# Claude Code SDK - available on PyPI
+claude-code-sdk
+
+# Anthropic API for fallback
 anthropic>=0.25.0
 
 # Existing project dependencies (add your existing ones here)

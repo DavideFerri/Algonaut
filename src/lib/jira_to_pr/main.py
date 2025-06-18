@@ -6,8 +6,8 @@ from typing import Optional
 
 from langchain_core.messages import HumanMessage
 
-from .builder import build_jira_to_pr_graph, create_initial_state
-from .config import validate_jira_to_pr_config, create_sample_env_file
+from lib.jira_to_pr.builder import build_jira_to_pr_graph, create_initial_state
+from lib.jira_to_pr.config import validate_jira_to_pr_config, create_sample_env_file
 from dependencies.settings import settings
 
 

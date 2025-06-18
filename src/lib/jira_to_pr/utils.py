@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 import subprocess
 import logging
 
-from .models import TicketData, RepositoryInfo, CodeChange
-from .constants import ProgrammingLanguage, LANGUAGE_PATTERNS, FRAMEWORK_PATTERNS
+from lib.jira_to_pr.models import TicketData, RepositoryInfo, CodeChange
+from lib.jira_to_pr.constants import ProgrammingLanguage, LANGUAGE_PATTERNS, FRAMEWORK_PATTERNS
 
 
 # Logging setup
@@ -20,6 +20,22 @@ logger = logging.getLogger(__name__)
 
 class GitUtils:
     """Utilities for Git operations."""
+    
+    @staticmethod
+    def _configure_git():
+        """Configure Git with user settings from environment variables."""
+        try:
+            from dependencies.settings import settings
+            
+            # Configure git user
+            subprocess.run(["git", "config", "--global", "user.name", settings.git_user_name], check=True)
+            subprocess.run(["git", "config", "--global", "user.email", settings.git_user_email], check=True)
+            
+            logger.info(f"Git configured with user: {settings.git_user_name} <{settings.git_user_email}>")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to configure Git: {e}")
+            return False
     
     @staticmethod
     def clone_repository(repo_url: str, local_path: str, branch: str = "main") -> bool:
@@ -35,6 +51,9 @@ class GitUtils:
             bool: True if successful, False otherwise
         """
         try:
+            # Configure Git before any operations
+            GitUtils._configure_git()
+            
             if Path(local_path).exists():
                 logger.info(f"Repository already exists at {local_path}")
                 return True
@@ -67,6 +86,9 @@ class GitUtils:
             bool: True if successful, False otherwise
         """
         try:
+            # Configure Git before any operations
+            GitUtils._configure_git()
+            
             # Change to repository directory
             original_cwd = os.getcwd()
             os.chdir(repo_path)
@@ -107,6 +129,9 @@ class GitUtils:
             bool: True if successful, False otherwise
         """
         try:
+            # Configure Git before any operations
+            GitUtils._configure_git()
+            
             original_cwd = os.getcwd()
             os.chdir(repo_path)
             
