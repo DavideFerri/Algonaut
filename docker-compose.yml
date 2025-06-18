@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        TAMARIX_GITHUB_TOKEN: ${GITHUB_TOKEN}
+    container_name: app
+    ports:
+      - "2024:2024"
+    env_file:
+      - .env
+    environment:
+      - PUBLIC_ENV=dev
+    volumes:
+      - ./src:/usr/app/src
+      - ./tests:/usr/app/tests
+      - ./.env:/usr/app/.env
+    networks:
+      - network
+    profiles:
+      - dev
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env.client
+    environment:
+      - PUBLIC_ENV=dev
+    volumes:
+      - ./client:/usr/app
+      - ./.env.client:/usr/app/.env.client
+    networks:
+      - network
+    restart: on-failure
+    depends_on:
+      - app
+    profiles:
+      - dev
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.local-test
+      args:
+        TAMARIX_GITHUB_TOKEN: ${GITHUB_TOKEN}
+    container_name: tests
+    env_file:
+      - .env
+    environment:
+      - PUBLIC_ENV=test
+      - PYTHONPATH=/usr/app
+    volumes:
+      - ./src:/usr/app/src:ro
+      - ./tests:/usr/app/tests:ro
+      - ./.env:/usr/app/.env:ro
+      - ./htmlcov:/usr/app/htmlcov
+    networks:
+      - network
+    profiles:
+      - test
+
+networks:
+  network:
+    driver: bridge
