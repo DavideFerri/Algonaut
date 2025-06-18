@@ -1,0 +1,19 @@
+{
+  "dependencies": ["./src"],
+  "dockerfile_lines": [
+    "RUN apt-get update && \\",
+    "    apt-get install -y --no-install-recommends \\",
+    "    poppler-utils \\",
+    "    default-jre \\",
+    "    curl \\",
+    "    unzip \\",
+    "    awscli \\",
+    "    python3-magic && \\",
+    "    apt-get clean && \\",
+    "    rm -rf /var/lib/apt/lists/*"
+  ],
+  "graphs": {
+    "agent": "./src/lib/categorisation/graph.py:graph"
+  },
+  "env": ".env"
+}
