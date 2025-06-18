@@ -1,0 +1,26 @@
+# Jira to PR Automation Dependencies
+
+# Core LangGraph and LangChain
+langgraph>=0.0.55
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-openai>=0.1.0
+
+# External API clients
+atlassian-python-api>=3.41.0
+PyGithub>=1.59.0
+httpx>=0.24.0
+
+# Claude Code SDK (when available)
+# claude-code-sdk  # Uncomment when SDK is available
+
+# Configuration and validation
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+pathlib>=1.0.0
+
+# Optional: for enhanced AI capabilities
+anthropic>=0.25.0  # For Claude API integration
