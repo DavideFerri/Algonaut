@@ -91,7 +91,111 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
             )
         )
 
-        # Rest of the original implementation...
+        # Process the async generator to get results
+        tickets = []
+        response_text = ""
+        chunk_count = 0
+        
+        print("Starting to process Jira MCP response...")
+        
+        try:
+            async for chunk in result_generator:
+                chunk_count += 1
+                print(f"\n{'='*80}")
+                print(f"Jira chunk #{chunk_count}: {type(chunk).__name__}")
+                print(f"{'='*80}")
+                
+                # Print full chunk content for debugging
+                print(f"Full chunk content:\n{chunk}")
+                
+                response_text += str(chunk)
+                
+                # Look for JSON data in the response
+                if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
+                    if hasattr(chunk, 'result'):
+                        result_content = chunk.result
+                    
+                    # Try to parse JSON from the result
+                    import re
+                    import json
+                    
+                    # Look for JSON blocks in code blocks or plain text
+                    json_patterns = [
+                        r'```json\s*(\{.*?\})\s*```',  # JSON in code blocks
+                        r'```\s*(\{.*?\})\s*```',      # JSON in plain code blocks
+                        r'(\{.*?"issues".*?\})',       # JSON with issues array
+                        r'(\{.*?\})'                   # Any JSON object
+                    ]
+                    
+                    json_matches = []
+                    for pattern in json_patterns:
+                        matches = re.findall(pattern, result_content, re.DOTALL)
+                        json_matches.extend(matches)
+                        if matches:
+                            break  # Use first successful pattern
+                    
+                    for json_match in json_matches:
+                        try:
+                            data = json.loads(json_match)
+                            
+                            # Handle nested structure with "issues" array
+                            if isinstance(data, dict) and 'issues' in data:
+                                issues = data['issues']
+                            elif isinstance(data, list):
+                                issues = data
+                            else:
+                                issues = [data]
+                            
+                            for issue in issues:
+                                if isinstance(issue, dict) and 'key' in issue:
+                                    # Create TicketData object with proper validation
+                                    # Handle status - ensure it's a valid enum value
+                                    raw_status = issue.get('status', {}).get('name', 'To Do') if isinstance(issue.get('status'), dict) else str(issue.get('status', 'To Do'))
+                                    if raw_status not in ['To Do', 'In Progress', 'In Review', 'Done']:
+                                        raw_status = 'To Do'  # Default to valid status
+                                    
+                                    # Generate URL for the ticket
+                                    ticket_key = issue.get('key', '')
+                                    ticket_url = f"{settings.jira_url}/browse/{ticket_key}" if ticket_key else ""
+                                    
+                                    ticket = TicketData(
+                                        id=str(issue.get('id', '')),
+                                        key=ticket_key,
+                                        summary=issue.get('summary', ''),
+                                        description=issue.get('description', ''),
+                                        status=raw_status,
+                                        priority=issue.get('priority', {}).get('name', 'Medium') if isinstance(issue.get('priority'), dict) else str(issue.get('priority', 'Medium')),
+                                        assignee=issue.get('assignee', {}).get('displayName', None) if isinstance(issue.get('assignee'), dict) else issue.get('assignee'),
+                                        reporter=issue.get('reporter', {}).get('displayName', 'Unknown') if isinstance(issue.get('reporter'), dict) else str(issue.get('reporter', 'Unknown')),
+                                        created=issue.get('created', datetime.now(timezone.utc).isoformat()),
+                                        updated=issue.get('updated', datetime.now(timezone.utc).isoformat()),
+                                        ticket_type=issue.get('issuetype', {}).get('name', 'Task') if isinstance(issue.get('issuetype'), dict) else str(issue.get('issuetype', 'Task')),
+                                        labels=issue.get('labels', []),
+                                        components=[comp.get('name', str(comp)) if isinstance(comp, dict) else str(comp) for comp in issue.get('components', [])],
+                                        fix_versions=[ver.get('name', str(ver)) if isinstance(ver, dict) else str(ver) for ver in issue.get('fixVersions', [])],
+                                        project_key=issue.get('project', {}).get('key', settings.jira_project_key) if isinstance(issue.get('project'), dict) else str(issue.get('project', settings.jira_project_key)),
+                                        url=ticket_url
+                                    )
+                                    tickets.append(ticket)
+                        
+                        except json.JSONDecodeError:
+                            continue
+        
+        except Exception as async_error:
+            print(f"Error processing Jira async generator: {async_error}")
+            import traceback
+            print(traceback.format_exc())
+        
+        print(f"Finished processing Jira MCP response. Found {len(tickets)} tickets.")
+        print(tickets)
+        
+        return {
+            "available_tickets": tickets,
+            "workflow_stage": "tickets_fetched",
+            "messages": [
+                AIMessage(content=f"Fetched {len(tickets)} unassigned tickets from active sprint")
+            ]
+        }
     except Exception as e:
         return {
             "error": str(e),
