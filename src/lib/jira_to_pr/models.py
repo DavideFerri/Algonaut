@@ -14,22 +14,22 @@ class TicketData(BaseModel):
     """Model for Jira ticket information."""
     id: str
     key: str
-    summary: str
+    summary: Optional[str] = None
     description: Optional[str] = None
-    status: TicketStatus
-    priority: TicketPriority
+    status: Optional[TicketStatus] = None
+    priority: Optional[TicketPriority] = None
     assignee: Optional[str] = None
-    reporter: str
-    created: datetime
-    updated: datetime
-    ticket_type: str
+    reporter: Optional[str] = None
+    created: Optional[datetime] = None
+    updated: Optional[datetime] = None
+    ticket_type: Optional[str] = None
     labels: List[str] = []
     components: List[str] = []
     fix_versions: List[str] = []
     project_key: str
     url: str
     acceptance_criteria: Optional[str] = None
-    story_points: Optional[int] = None
+    story_points: Optional[float] = None
     
     @property
     def priority_weight(self) -> int:

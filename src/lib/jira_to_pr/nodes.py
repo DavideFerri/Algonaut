@@ -14,15 +14,19 @@ from lib.jira_to_pr.models import (
     JiraToPRState, TicketData, RepositoryInfo, CodeGenerationRequest,
     CodeGenerationResult, PullRequestData, WorkflowResult, CodeChange
 )
-# MCP direct integration
+# Claude SDK with MCP integration
 try:
-    from mcp.client.stdio import stdio_client
-    from mcp.client.session import ClientSession
-    import subprocess
-    import asyncio
-    MCP_AVAILABLE = True
+    from claude_code_sdk import query, ClaudeCodeOptions
+    from claude_code_sdk.types import McpServerConfig
+    CLAUDE_SDK_AVAILABLE = True
 except ImportError:
-    MCP_AVAILABLE = False
+    CLAUDE_SDK_AVAILABLE = False
+
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
 from lib.jira_to_pr.constants import DEFAULT_BRANCH_PREFIX, DEFAULT_PR_TEMPLATE
 
 
@@ -32,43 +36,140 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
 async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
     """
-    Fetch unassigned tickets from the active sprint.
-    For now, using a simplified approach that returns mock data until MCP integration is fully working.
+    Fetch unassigned tickets from the active sprint using Claude SDK with MCP.
     """
     try:
         from dependencies.settings import settings
         
-        # TODO: Replace with actual MCP integration once Docker containers are working
-        # For now, return mock tickets to test the workflow
-        
-        mock_tickets = [
-            {
-                "id": "12345",
-                "key": f"{settings.jira_project_key}-123",
-                "fields": {
-                    "summary": "Test ticket for automation",
-                    "description": "This is a test ticket to verify the jira-to-pr automation workflow",
-                    "status": {"name": "To Do"},
-                    "priority": {"name": "Medium"},
-                    "assignee": None,
-                    "reporter": {"displayName": "Test User"},
-                    "created": "2024-01-01T00:00:00.000Z",
-                    "updated": "2024-01-01T00:00:00.000Z",
-                    "issuetype": {"name": "Task"},
-                    "labels": ["automation", "test"],
-                    "components": [],
-                    "fixVersions": [],
-                    "project": {"key": settings.jira_project_key}
-                }
+        if not CLAUDE_SDK_AVAILABLE:
+            return {
+                "error": "Claude SDK is required for MCP integration",
+                "workflow_stage": "error"
             }
-        ]
         
-        # Parse tickets using the same function that would be used for real data
+        # Configure MCP server for Jira
+        jira_server_config = McpServerConfig(
+            command="docker",
+            args=[
+                "run", "-i", "--rm",
+                "-e", "JIRA_URL",
+                "-e", "JIRA_USERNAME", 
+                "-e", "JIRA_API_TOKEN",
+                "ghcr.io/sooperset/mcp-atlassian:latest"
+            ],
+            env={
+                "JIRA_URL": settings.jira_url,
+                "JIRA_USERNAME": settings.jira_email,
+                "JIRA_API_TOKEN": settings.jira_api_token
+            }
+        )
+        
+        # Search for tickets
+        jql = f'project = {settings.jira_project_key} AND sprint in openSprints() AND assignee is EMPTY AND status = "To Do"'
+        
+        prompt = f"""
+        Use the Jira MCP server to search for issues with the following JQL:
+        {jql}
+        
+        Return the issues in JSON format with all relevant fields including:
+        - id, key, summary, description
+        - status, priority, assignee, reporter
+        - created, updated, issuetype
+        - labels, components, fixVersions, project
+        """
+        
+        # Query using Claude SDK with MCP configuration
+        result_generator = query(
+            prompt=prompt,
+            options=ClaudeCodeOptions(
+                mcp_servers={"mcp-atlassian": jira_server_config},
+                mcp_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"],
+                allowed_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"]
+            )
+        )
+        
+        # Collect all responses from the async generator
+        response_text = ""
+        tool_result_data = None
+        
+        async for chunk in result_generator:
+            print(f"\n{'='*60}")
+            print(f"Chunk type: {type(chunk).__name__}")
+            
+            # Check if this is a UserMessage with tool results
+            if hasattr(chunk, 'content') and isinstance(chunk.content, list):
+                for content_item in chunk.content:
+                    if isinstance(content_item, dict) and content_item.get('type') == 'tool_result':
+                        # Extract the actual Jira data from tool result
+                        tool_content = content_item.get('content', [])
+                        if tool_content and isinstance(tool_content, list):
+                            for item in tool_content:
+                                if isinstance(item, dict) and item.get('type') == 'text':
+                                    tool_result_data = item.get('text', '')
+                                    print(f"Found tool result data!")
+                                    break
+            
+            # Accumulate all text for fallback parsing
+            response_text += str(chunk)
+        
+        print(f"\n{'='*60}")
+        print("Parsing Jira response...")
+        
+        # Parse the result - prefer tool result data if available
+        import json
+        issues = []
+        
+        if tool_result_data:
+            try:
+                print(f"Parsing tool result data...")
+                jira_response = json.loads(tool_result_data)
+                if isinstance(jira_response, dict) and 'issues' in jira_response:
+                    issues = jira_response['issues']
+                    print(f"Found {len(issues)} issues in tool result")
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse tool result data: {e}")
+        
+        # Fallback: Check if the response indicates no issues found
+        if not issues and ("No issues found" in response_text or "0 results" in response_text):
+            issues = []
+        elif not issues:
+            # Look for JSON in the response
+            json_start = response_text.find('[')
+            json_end = response_text.rfind(']') + 1
+            
+            # Also check for object format
+            if json_start < 0:
+                json_start = response_text.find('{')
+                json_end = response_text.rfind('}') + 1
+
+            if json_start >= 0 and json_end > json_start:
+                json_text = response_text[json_start:json_end]
+                try:
+                    issues_data = json.loads(json_text)
+                    
+                    # Handle different possible response formats
+                    if isinstance(issues_data, dict):
+                        if "issues" in issues_data:
+                            issues = issues_data["issues"]
+                        else:
+                            issues = [issues_data]
+                    elif isinstance(issues_data, list):
+                        issues = issues_data
+                    else:
+                        issues = []
+                except json.JSONDecodeError:
+                    issues = []
+            else:
+                issues = []
+
+        # Parse tickets using the helper function
         tickets = []
-        for issue in mock_tickets:
+        for issue in issues:
             tickets.append(_parse_jira_issue(issue, settings.jira_url))
-        
-        if not tickets:
+        print(tickets)
+        raise Exception()
+
+        if len(tickets) == 0:
             return {
                 "available_tickets": [],
                 "workflow_stage": "no_tickets",
@@ -78,7 +179,7 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
         return {
             "available_tickets": tickets,
             "workflow_stage": "tickets_fetched",
-            "messages": [AIMessage(content=f"Found {len(tickets)} tickets (mock data for testing)")]
+            "messages": [AIMessage(content=f"Found {len(tickets)} unassigned tickets from Jira")]
         }
         
     except Exception as e:
@@ -146,12 +247,6 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
             - workflow_stage: Updated to "repositories_analyzed"
             - messages: Analysis results
     """
-    if not MCP_AVAILABLE:
-        return {
-            "error": "MCP is required for GitHub integration",
-            "workflow_stage": "error"
-        }
-    
     try:
         if not state.current_ticket:
             return {
@@ -425,12 +520,6 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
             - workflow_stage: Updated to "prs_created"
             - messages: PR creation results
     """
-    if not MCP_AVAILABLE:
-        return {
-            "error": "MCP is required for PR creation",
-            "workflow_stage": "error"
-        }
-    
     try:
         if not state.code_changes or not state.current_ticket:
             return {
@@ -573,35 +662,99 @@ async def _ensure_repository_cloned(repo: RepositoryInfo) -> bool:
 
 
 def _parse_jira_issue(issue: Dict, jira_url: str) -> TicketData:
-    """Parse Jira issue JSON into TicketData model."""
-    fields = issue.get('fields', {})
+    """Parse Jira issue JSON into TicketData model - handles both API and MCP formats."""
     
-    # Extract acceptance criteria from custom fields or description
-    acceptance_criteria = None
-    if 'customfield_10001' in fields and fields['customfield_10001']:
-        acceptance_criteria = fields['customfield_10001']
+    # Check if this is the standard Jira API format (with fields) or MCP format (flattened)
+    if 'fields' in issue:
+        # Standard Jira API format
+        fields = issue.get('fields', {})
+        summary = fields.get('summary', '')
+        description = fields.get('description', '')
+        status_name = fields.get('status', {}).get('name', 'To Do')
+        priority_name = fields.get('priority', {}).get('name', 'Medium')
+        assignee_name = fields.get('assignee', {}).get('displayName') if fields.get('assignee') else None
+        reporter_name = fields.get('reporter', {}).get('displayName', 'Unknown')
+        created_str = fields.get('created', '')
+        updated_str = fields.get('updated', '')
+        ticket_type = fields.get('issuetype', {}).get('name', 'Task')
+        labels = fields.get('labels', [])
+        components = [comp['name'] for comp in fields.get('components', [])]
+        fix_versions = [ver['name'] for ver in fields.get('fixVersions', [])]
+        project_key = fields.get('project', {}).get('key', '')
+        
+        # Extract acceptance criteria from custom fields
+        acceptance_criteria = None
+        if 'customfield_10001' in fields and fields['customfield_10001']:
+            acceptance_criteria = fields['customfield_10001']
+        
+        # Extract story points
+        story_points = None
+        if 'customfield_10002' in fields and fields['customfield_10002']:
+            story_points = fields['customfield_10002']
+    else:
+        # MCP format (flattened structure)
+        summary = issue.get('summary', '')
+        description = issue.get('description', '')
+        status_name = issue.get('status', {}).get('name', 'To Do')
+        priority_name = issue.get('priority', {}).get('name', 'Medium')
+        assignee_name = issue.get('assignee', {}).get('display_name') if issue.get('assignee') else None
+        reporter_name = issue.get('reporter', {}).get('display_name', 'Unknown')
+        created_str = issue.get('created', '')
+        updated_str = issue.get('updated', '')
+        ticket_type = issue.get('issue_type', {}).get('name', 'Task')
+        labels = issue.get('labels', [])
+        components = [comp['name'] for comp in issue.get('components', [])] if issue.get('components') else []
+        fix_versions = [ver['name'] for ver in issue.get('fix_versions', [])] if issue.get('fix_versions') else []
+        project_key = issue.get('project', {}).get('key', '')
+        
+        # Extract acceptance criteria and story points from custom_fields
+        # In MCP format, custom_fields is a top-level object in the issue
+        custom_fields = issue.get('custom_fields', {})
+        acceptance_criteria = None
+        story_points = None
+        
+        # Check if custom_fields exists at top level
+        if custom_fields:
+            if custom_fields.get('customfield_10001', {}).get('value'):
+                acceptance_criteria = custom_fields['customfield_10001']['value']
+            
+            # Check for story points in customfield_10016
+            if custom_fields.get('customfield_10016', {}).get('value') is not None:
+                story_points = custom_fields['customfield_10016']['value']
+        else:
+            if issue.get('customfield_10001'):
+                acceptance_criteria = issue['customfield_10001']
+            
+            if issue.get('customfield_10016') is not None:
+                story_points = issue['customfield_10016']
     
-    # Extract story points
-    story_points = None
-    if 'customfield_10002' in fields and fields['customfield_10002']:
-        story_points = fields['customfield_10002']
+    # Parse datetime strings
+    try:
+        created_dt = datetime.fromisoformat(created_str.replace('Z', '+00:00')) if created_str else datetime.now()
+    except:
+        created_dt = datetime.now()
+    
+    try:
+        updated_dt = datetime.fromisoformat(updated_str.replace('Z', '+00:00')) if updated_str else datetime.now()
+    except:
+        updated_dt = datetime.now()
     
     return TicketData(
         id=issue['id'],
         key=issue['key'],
-        summary=fields.get('summary', ''),
-        description=fields.get('description', ''),
-        status=fields.get('status', {}).get('name', 'To Do'),
-        priority=fields.get('priority', {}).get('name', 'Medium'),
-        assignee=fields.get('assignee', {}).get('displayName') if fields.get('assignee') else None,
-        reporter=fields.get('reporter', {}).get('displayName', 'Unknown'),
-        created=datetime.fromisoformat(fields.get('created', '').replace('Z', '+00:00')) if fields.get('created') else datetime.now(),
-        updated=datetime.fromisoformat(fields.get('updated', '').replace('Z', '+00:00')) if fields.get('updated') else datetime.now(),
-        ticket_type=fields.get('issuetype', {}).get('name', 'Task'),
-        labels=fields.get('labels', []),
-        components=[comp['name'] for comp in fields.get('components', [])],
-        fix_versions=[ver['name'] for ver in fields.get('fixVersions', [])],
-        project_key=fields.get('project', {}).get('key', ''),
+        summary=summary,
+        description=description,
+        status=status_name,
+        priority=priority_name,
+        assignee=assignee_name,
+        reporter=reporter_name,
+        created=created_dt,
+        updated=updated_dt,
+        ticket_type=ticket_type,
+        labels=labels,
+        components=components,
+        fix_versions=fix_versions,
+        project_key=project_key,
         url=f"{jira_url}/browse/{issue['key']}",
         acceptance_criteria=acceptance_criteria,
         story_points=story_points
