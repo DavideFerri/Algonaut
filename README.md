@@ -2,6 +2,10 @@
 
 A LangGraph-based agent that automates the complete workflow from Jira ticket to GitHub PR creation using AI-powered code generation.
 
+## Owner
+
+**Mister X**
+
 ## Overview
 
 This system:
