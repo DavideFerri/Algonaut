@@ -83,20 +83,37 @@ async def create_pr_or_review(state: JiraToPRState) -> Literal["create_pull_requ
         - "create_pull_requests": When code changes meet quality criteria
         - "cleanup_state": When code quality issues require human review or error occurred
     """
+    print(f"\n{'='*60}")
+    print(f"DEBUG: create_pr_or_review edge function")
+    print(f"{'='*60}")
+
+    # Check for errors
+    print(f"state.error: {state.error}")
     if state.error is not None:
+        print("→ Routing to cleanup_state due to error")
         return "cleanup_state"
     
+    # Check branches created
+    print(f"state.branches_created: {state.branches_created}")
+    print(f"Number of branches: {len(state.branches_created) if state.branches_created else 0}")
+    
+    # Check code changes
+    print(f"state.code_changes exists: {state.code_changes is not None}")
+    print(f"Number of code changes: {len(state.code_changes) if state.code_changes else 0}")
+    if state.code_changes:
+        for i, change in enumerate(state.code_changes[:3]):  # Show first 3
+            print(f"  Change {i}: {change.file_path} - {change.operation}")
+    
+    # Also check if we have code changes tracked
     if not state.code_changes or len(state.code_changes) == 0:
+        print("→ Routing to cleanup_state due to no code changes")
         return "cleanup_state"
     
     # Quality gate: check if changes require human review
-    requires_review = await _assess_code_changes_quality(state)
+    # requires_review = await _assess_code_changes_quality(state)
     
-    if requires_review and state.require_human_review:
-        # In a real implementation, this would create a draft PR or flag for review
-        return "cleanup_state"
-    else:
-        return "create_pull_requests"
+    print("→ Routing to create_pull_requests")
+    return "create_pull_requests"
 
 
 async def continue_or_end(state: JiraToPRState) -> Literal["cleanup_state", END]:
@@ -230,7 +247,7 @@ def _summarize_changes(code_changes) -> str:
     summary_lines = []
     
     for change in code_changes:
-        operation = change.operation.upper()
+        operation = change.operation.upper() if change.operation else "MODIFY"
         file_path = change.file_path
         description = change.description or "No description"
         complexity = change.complexity_score

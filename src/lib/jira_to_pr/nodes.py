@@ -40,92 +40,64 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
     """
     # Temporarily return mock data for testing
     from datetime import datetime, timezone, timedelta
-    
-    mock_ticket = TicketData(
-        id='16871', 
-        key='MAPM-2464', 
-        summary='Algonaut issue',
-        description='Please improve the .README',
-        status='To Do', 
-        priority='Medium', 
-        assignee=None, 
-        reporter='Davide Biagio Ferri', 
-        created=datetime(2025, 6, 8, 22, 39, 50, 201000, tzinfo=timezone(timedelta(seconds=7200))), 
-        updated=datetime(2025, 6, 19, 10, 24, 10, 207000, tzinfo=timezone(timedelta(seconds=7200))), 
-        ticket_type='Story', 
-        labels=[], 
-        components=[], 
-        fix_versions=[], 
-        project_key='MAPM', 
-        url='https://tamarix.atlassian.net/browse/MAPM-2464', 
-        acceptance_criteria=None, 
-        story_points=4.0
-    )
-    
-    return {
-        "available_tickets": [mock_ticket],
-        "workflow_stage": "tickets_fetched",
-        "messages": [AIMessage(content="Found 1 mock ticket for testing")]
-    }
-    
-    # Commented out original Jira MCP code
-    # try:
-    #     from dependencies.settings import settings
-    #     
-    #     if not CLAUDE_SDK_AVAILABLE:
-    #         return {
-    #             "error": "Claude SDK is required for MCP integration",
-    #             "workflow_stage": "error"
-    #         }
-    #     
-    #     # Configure MCP server for Jira
-    #     jira_server_config = McpServerConfig(
-    #         command="docker",
-    #         args=[
-    #             "run", "-i", "--rm",
-    #             "-e", "JIRA_URL",
-    #             "-e", "JIRA_USERNAME", 
-    #             "-e", "JIRA_API_TOKEN",
-    #             "ghcr.io/sooperset/mcp-atlassian:latest"
-    #         ],
-    #         env={
-    #             "JIRA_URL": settings.jira_url,
-    #             "JIRA_USERNAME": settings.jira_email,
-    #             "JIRA_API_TOKEN": settings.jira_api_token
-    #         }
-    #     )
-    #     
-    #     # Search for tickets
-    #     jql = f'project = {settings.jira_project_key} AND sprint in openSprints() AND assignee is EMPTY AND status = "To Do"'
-    #     
-    #     prompt = f"""
-    #     Use the Jira MCP server to search for issues with the following JQL:
-    #     {jql}
-    #     
-    #     Return the issues in JSON format with all relevant fields including:
-    #     - id, key, summary, description
-    #     - status, priority, assignee, reporter
-    #     - created, updated, issuetype
-    #     - labels, components, fixVersions, project
-    #     """
-    #     
-    #     # Query using Claude SDK with MCP configuration
-    #     result_generator = query(
-    #         prompt=prompt,
-    #         options=ClaudeCodeOptions(
-    #             mcp_servers={"mcp-atlassian": jira_server_config},
-    #             mcp_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"],
-    #             allowed_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"]
-    #         )
-    #     )
-    #     
-    #     # Rest of the original implementation...
-    # except Exception as e:
-    #     return {
-    #         "error": str(e),
-    #         "workflow_stage": "error",
-    #         "messages": [AIMessage(content=f"Error fetching tickets: {str(e)}")]
-    #     }
+
+    try:
+        from dependencies.settings import settings
+
+        if not CLAUDE_SDK_AVAILABLE:
+            return {
+                "error": "Claude SDK is required for MCP integration",
+                "workflow_stage": "error"
+            }
+
+        # Configure MCP server for Jira
+        jira_server_config = McpServerConfig(
+            command="docker",
+            args=[
+                "run", "-i", "--rm",
+                "-e", "JIRA_URL",
+                "-e", "JIRA_USERNAME",
+                "-e", "JIRA_API_TOKEN",
+                "ghcr.io/sooperset/mcp-atlassian:latest"
+            ],
+            env={
+                "JIRA_URL": settings.jira_url,
+                "JIRA_USERNAME": settings.jira_email,
+                "JIRA_API_TOKEN": settings.jira_api_token
+            }
+        )
+
+        # Search for tickets
+        jql = f'project = {settings.jira_project_key} AND sprint in openSprints() AND assignee is EMPTY AND status = "To Do"'
+
+        prompt = f"""
+        Use the Jira MCP server to search for issues with the following JQL:
+        {jql}
+
+        Return the issues in JSON format with all relevant fields including:
+        - id, key, summary, description
+        - status, priority, assignee, reporter
+        - created, updated, issuetype
+        - labels, components, fixVersions, project
+        """
+
+        # Query using Claude SDK with MCP configuration
+        result_generator = query(
+            prompt=prompt,
+            options=ClaudeCodeOptions(
+                mcp_servers={"mcp-atlassian": jira_server_config},
+                mcp_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"],
+                allowed_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"]
+            )
+        )
+
+        # Rest of the original implementation...
+    except Exception as e:
+        return {
+            "error": str(e),
+            "workflow_stage": "error",
+            "messages": [AIMessage(content=f"Error fetching tickets: {str(e)}")]
+        }
 
 
 async def select_ticket(state: JiraToPRState) -> Dict:
@@ -606,10 +578,10 @@ async def generate_code(state: JiraToPRState) -> Dict:
                                 import json
                                 
                                 # Look for JSON block in the result
-                                json_match = re.search(r'```json\s*(\{[^}]+\})\s*```', result_content, re.DOTALL)
+                                json_match = re.search(r'```json\s*(\{.*?\})\s*```', result_content, re.DOTALL)
                                 if not json_match:
                                     # Try without code block markers
-                                    json_match = re.search(r'\{[^{}]*"branch_created"[^{}]*"success"\s*:\s*true[^{}]*\}', result_content, re.DOTALL)
+                                    json_match = re.search(r'\{.*?"branch_created".*?"success"\s*:\s*true.*?\}', result_content, re.DOTALL)
                                 
                                 if json_match:
                                     try:
@@ -679,26 +651,58 @@ async def generate_code(state: JiraToPRState) -> Dict:
                 continue
         
         if not branches_created:
+            import traceback
+            print(f"Error: No branches were created")
+            print(traceback.format_exc())
             return {
                 "error": "No branches were created",
                 "workflow_stage": "error",
-                "messages": [AIMessage(content="Failed to create branches for code changes")]
+                "messages": [AIMessage(content="Failed to create branches (will retry)")]
             }
+        
+        # Parse file changes from branches and create CodeChange objects
+        code_changes = []
+        total_files_modified = 0
+        
+        for branch_info in branches_created:
+            branch_files = []
+            if branch_info.get('changes_description'):
+                # Parse each file from the description
+                for line in branch_info['changes_description'].split('\n'):
+                    if line.strip().startswith('- '):
+                        # Extract file path and description
+                        parts = line.strip()[2:].split(':', 1)
+                        if len(parts) == 2:
+                            file_path = parts[0].strip()
+                            description = parts[1].strip()
+                            
+                            # Create CodeChange object
+                            code_change = CodeChange(
+                                file_path=file_path,
+                                operation='modify',  # Fixed: use 'operation' field name
+                                description=description,
+                                complexity_score=1  # Default score
+                            )
+                            code_changes.append(code_change)
+                            branch_files.append(code_change)
+            
+            # Store file count for this branch
+            branch_info['files_count'] = len(branch_files)
+            total_files_modified += len(branch_files)
         
         print(f"\n{'='*60}")
         print(f"Summary:")
         print(f"  Branches created: {len(branches_created)}")
-        print(f"  Total files modified: {len(all_changes)}")
+        print(f"  Total files modified: {total_files_modified}")
         for branch_info in branches_created:
-            print(f"  - {branch_info['repository']}: {branch_info['branch']}")
-        raise Exception("")
+            print(f"  - {branch_info['repository']}: {branch_info['branch']} ({branch_info.get('files_count', 0)} files)")
         
         return {
-            "code_changes": all_changes,
+            "code_changes": code_changes,
             "branches_created": branches_created,
             "workflow_stage": "code_generated",
             "messages": [
-                AIMessage(content=f"Created {len(branches_created)} branches with {len(all_changes)} file changes")
+                AIMessage(content=f"Created {len(branches_created)} branches with {total_files_modified} file changes")
             ]
         }
         
@@ -765,22 +769,24 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                 
                 # Create PR using GitHub MCP
                 pr_prompt = f"""
-                Create a pull request using the following details:
+                Create a pull request for the changes in branch {branch_name}.
                 
-                Use create_pull_request with:
+                Use the create_pull_request tool with these exact parameters:
                 - owner: {owner}
                 - repo: {repo_name}
                 - title: "[{state.current_ticket.key}] {state.current_ticket.summary}"
                 - body: {pr_body}
                 - head: {branch_name}
                 - base: main
+                - draft: false
+                - maintainer_can_modify: true
                 
-                Return the result as JSON:
+                After creating the pull request, return a JSON summary with the PR details:
                 {{
                     "success": true,
-                    "html_url": "(the PR URL)",
-                    "number": (the PR number),
-                    "title": "(the PR title)"
+                    "html_url": "the PR URL from the response",
+                    "number": "the PR number from the response",
+                    "title": "the PR title"
                 }}
                 """
                 
@@ -806,7 +812,12 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                 
                 async for chunk in result_generator:
                     chunk_count += 1
-                    print(f"\nPR chunk #{chunk_count}: {type(chunk).__name__}")
+                    print(f"\n{'='*80}")
+                    print(f"PR chunk #{chunk_count}: {type(chunk).__name__}")
+                    print(f"{'='*80}")
+                    
+                    # Print full chunk content for debugging
+                    print(f"Full chunk content:\n{chunk}")
                     
                     try:
                         # Check for tool usage
@@ -815,6 +826,7 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                                 if isinstance(content_item, dict):
                                     if content_item.get('type') == 'tool_use' and 'create_pull_request' in content_item.get('name', ''):
                                         print(f"  ✓ Creating pull request")
+                                        print(f"    Tool input: {content_item.get('input', {})}")
                                     elif content_item.get('type') == 'tool_result':
                                         print(f"  Tool result received")
                                         # Extract PR info from tool result
@@ -923,7 +935,7 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
     except Exception as e:
         return {
             "error": str(e),
-            "workflow_stage": "error",
+            "workflow_stage": "retry_create_pull_requests",
             "messages": [AIMessage(content=f"Error creating pull requests: {str(e)}")]
         }
 
@@ -944,6 +956,7 @@ async def cleanup_state(state: JiraToPRState) -> Dict:
         "current_ticket": None,
         "selected_repositories": [],
         "code_changes": [],
+        "branches_created": [],
         "pull_requests": [],
         "processing_repo": None,
         "current_branch": None,

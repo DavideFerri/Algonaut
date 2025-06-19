@@ -60,7 +60,7 @@ class RepositoryInfo(BaseModel):
 class CodeChange(BaseModel):
     """Model for a single code change or file modification."""
     file_path: str
-    operation: str  # "create", "modify", "delete"
+    operation: Optional[str] = None  # "create", "modify", "delete"
     old_content: Optional[str] = None
     new_content: Optional[str] = None
     diff: Optional[str] = None
@@ -112,6 +112,7 @@ class JiraToPRState(BaseModel):
     available_tickets: List[TicketData] = []
     selected_repositories: List[RepositoryInfo] = []
     code_changes: List[CodeChange] = []
+    branches_created: List[Dict[str, Any]] = []  # Track branches created with their details
     pull_requests: List[PullRequestData] = []
     
     # Processing state
