@@ -99,95 +99,102 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
 
         print("Starting to process Jira MCP response...")
 
-        async for chunk in result_generator:
+        max_attempts = 3
+        for i in range(max_attempts):
             try:
-                chunk_count += 1
-                print(f"\n{'='*80}")
-                print(f"Jira chunk #{chunk_count}: {type(chunk).__name__}")
-                print(f"{'='*80}")
+                async for chunk in result_generator:
+                    try:
+                        chunk_count += 1
+                        print(f"\n{'='*80}")
+                        print(f"Jira chunk #{chunk_count}: {type(chunk).__name__}")
+                        print(f"{'='*80}")
 
-                # Print full chunk content for debugging
-                print(f"Full chunk content:\n{chunk}")
+                        # Print full chunk content for debugging
+                        print(f"Full chunk content:\n{chunk}")
 
-                response_text += str(chunk)
+                        response_text += str(chunk)
 
-                # Look for JSON data in the response
-                if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
-                    if hasattr(chunk, 'result'):
-                        result_content = chunk.result
+                        # Look for JSON data in the response
+                        if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
+                            if hasattr(chunk, 'result'):
+                                result_content = chunk.result
 
-                    # Try to parse JSON from the result
-                    import re
-                    import json
+                            # Try to parse JSON from the result
+                            import re
+                            import json
 
-                    # Look for JSON blocks in code blocks or plain text
-                    json_patterns = [
-                        r'```json\s*(\{.*?\})\s*```',  # JSON in code blocks
-                        r'```\s*(\{.*?\})\s*```',      # JSON in plain code blocks
-                        r'(\{.*?"issues".*?\})',       # JSON with issues array
-                        r'(\{.*?\})'                   # Any JSON object
-                    ]
+                            # Look for JSON blocks in code blocks or plain text
+                            json_patterns = [
+                                r'```json\s*(\{.*?\})\s*```',  # JSON in code blocks
+                                r'```\s*(\{.*?\})\s*```',      # JSON in plain code blocks
+                                r'(\{.*?"issues".*?\})',       # JSON with issues array
+                                r'(\{.*?\})'                   # Any JSON object
+                            ]
 
-                    json_matches = []
-                    for pattern in json_patterns:
-                        matches = re.findall(pattern, result_content, re.DOTALL)
-                        json_matches.extend(matches)
-                        if matches:
-                            break  # Use first successful pattern
+                            json_matches = []
+                            for pattern in json_patterns:
+                                matches = re.findall(pattern, result_content, re.DOTALL)
+                                json_matches.extend(matches)
+                                if matches:
+                                    break  # Use first successful pattern
 
-                    for json_match in json_matches:
-                        try:
-                            data = json.loads(json_match)
+                            for json_match in json_matches:
+                                try:
+                                    data = json.loads(json_match)
 
-                            # Handle nested structure with "issues" array
-                            if isinstance(data, dict) and 'issues' in data:
-                                issues = data['issues']
-                            elif isinstance(data, list):
-                                issues = data
-                            else:
-                                issues = [data]
+                                    # Handle nested structure with "issues" array
+                                    if isinstance(data, dict) and 'issues' in data:
+                                        issues = data['issues']
+                                    elif isinstance(data, list):
+                                        issues = data
+                                    else:
+                                        issues = [data]
 
-                            for issue in issues:
-                                if isinstance(issue, dict) and 'key' in issue:
-                                    # Create TicketData object with proper validation
-                                    # Handle status - ensure it's a valid enum value
-                                    raw_status = issue.get('status', {}).get('name', 'To Do') if isinstance(issue.get('status'), dict) else str(issue.get('status', 'To Do'))
-                                    if raw_status not in ['To Do', 'In Progress', 'In Review', 'Done']:
-                                        raw_status = 'To Do'  # Default to valid status
+                                    for issue in issues:
+                                        if isinstance(issue, dict) and 'key' in issue:
+                                            # Create TicketData object with proper validation
+                                            # Handle status - ensure it's a valid enum value
+                                            raw_status = issue.get('status', {}).get('name', 'To Do') if isinstance(issue.get('status'), dict) else str(issue.get('status', 'To Do'))
+                                            if raw_status not in ['To Do', 'In Progress', 'In Review', 'Done']:
+                                                raw_status = 'To Do'  # Default to valid status
 
-                                    # Generate URL for the ticket
-                                    ticket_key = issue.get('key', '')
-                                    ticket_url = f"{settings.jira_url}/browse/{ticket_key}" if ticket_key else ""
+                                            # Generate URL for the ticket
+                                            ticket_key = issue.get('key', '')
+                                            ticket_url = f"{settings.jira_url}/browse/{ticket_key}" if ticket_key else ""
 
-                                    ticket = TicketData(
-                                        id=str(issue.get('id', '')),
-                                        key=ticket_key,
-                                        summary=issue.get('summary', ''),
-                                        description=issue.get('description', ''),
-                                        status=raw_status,
-                                        priority=issue.get('priority', {}).get('name', 'Medium') if isinstance(issue.get('priority'), dict) else str(issue.get('priority', 'Medium')),
-                                        assignee=issue.get('assignee', {}).get('displayName', None) if isinstance(issue.get('assignee'), dict) else issue.get('assignee'),
-                                        reporter=issue.get('reporter', {}).get('displayName', 'Unknown') if isinstance(issue.get('reporter'), dict) else str(issue.get('reporter', 'Unknown')),
-                                        created=issue.get('created', datetime.now(timezone.utc).isoformat()),
-                                        updated=issue.get('updated', datetime.now(timezone.utc).isoformat()),
-                                        ticket_type=issue.get('issuetype', {}).get('name', 'Task') if isinstance(issue.get('issuetype'), dict) else str(issue.get('issuetype', 'Task')),
-                                        labels=issue.get('labels', []),
-                                        components=[comp.get('name', str(comp)) if isinstance(comp, dict) else str(comp) for comp in issue.get('components', [])],
-                                        fix_versions=[ver.get('name', str(ver)) if isinstance(ver, dict) else str(ver) for ver in issue.get('fixVersions', [])],
-                                        project_key=issue.get('project', {}).get('key', settings.jira_project_key) if isinstance(issue.get('project'), dict) else str(issue.get('project', settings.jira_project_key)),
-                                        url=ticket_url
-                                    )
-                                    tickets.append(ticket)
+                                            ticket = TicketData(
+                                                id=str(issue.get('id', '')),
+                                                key=ticket_key,
+                                                summary=issue.get('summary', ''),
+                                                description=issue.get('description', ''),
+                                                status=raw_status,
+                                                priority=issue.get('priority', {}).get('name', 'Medium') if isinstance(issue.get('priority'), dict) else str(issue.get('priority', 'Medium')),
+                                                assignee=issue.get('assignee', {}).get('displayName', None) if isinstance(issue.get('assignee'), dict) else issue.get('assignee'),
+                                                reporter=issue.get('reporter', {}).get('displayName', 'Unknown') if isinstance(issue.get('reporter'), dict) else str(issue.get('reporter', 'Unknown')),
+                                                created=issue.get('created', datetime.now(timezone.utc).isoformat()),
+                                                updated=issue.get('updated', datetime.now(timezone.utc).isoformat()),
+                                                ticket_type=issue.get('issuetype', {}).get('name', 'Task') if isinstance(issue.get('issuetype'), dict) else str(issue.get('issuetype', 'Task')),
+                                                labels=issue.get('labels', []),
+                                                components=[comp.get('name', str(comp)) if isinstance(comp, dict) else str(comp) for comp in issue.get('components', [])],
+                                                fix_versions=[ver.get('name', str(ver)) if isinstance(ver, dict) else str(ver) for ver in issue.get('fixVersions', [])],
+                                                project_key=issue.get('project', {}).get('key', settings.jira_project_key) if isinstance(issue.get('project'), dict) else str(issue.get('project', settings.jira_project_key)),
+                                                url=ticket_url
+                                            )
+                                            tickets.append(ticket)
 
-                        except json.JSONDecodeError:
-                            continue
-            except CLIJSONDecodeError as e:
-                print(f"  <UNK> Error parsing result summary: {e}")
+                                except json.JSONDecodeError:
+                                    continue
+                    except CLIJSONDecodeError as e:
+                        print(f"  <UNK> Error parsing result summary: {e}")
+                        continue
+                    except Exception as async_error:
+                        print(f"Error processing Jira async generator: {async_error}")
+                        import traceback
+                        print(traceback.format_exc())
+                break
+            except ExceptionGroup as eg:
+                print(f"  <UNK> Error parsing result summary: {eg}")
                 continue
-            except Exception as async_error:
-                print(f"Error processing Jira async generator: {async_error}")
-                import traceback
-                print(traceback.format_exc())
 
         print(f"Finished processing Jira MCP response. Found {len(tickets)} tickets.")
         print(tickets)
@@ -351,52 +358,58 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
         print("Starting to process GitHub async generator...")
 
         chunk_count = 0
-        try:
-            async for chunk in github_result_generator:
-                try:
-                    chunk_count += 1
-                    print(f"\nGitHub chunk #{chunk_count}: {type(chunk).__name__}")
-                    # Print chunk content for debugging
-                    print(f"Chunk content: {chunk}")
+        max_attempts = 3
+        for i in range(max_attempts):
+            try:
+                async for chunk in github_result_generator:
+                    try:
+                        chunk_count += 1
+                        print(f"\nGitHub chunk #{chunk_count}: {type(chunk).__name__}")
+                        # Print chunk content for debugging
+                        print(f"Chunk content: {chunk}")
 
-                    # Check if this is a UserMessage with tool results
-                    if hasattr(chunk, 'content') and isinstance(chunk.content, list):
-                        print(f"Chunk has content list with {len(chunk.content)} items")
-                        for i, content_item in enumerate(chunk.content):
-                            print(f"Content item #{i}: {type(content_item)} - {content_item.get('type') if isinstance(content_item, dict) else 'N/A'}")
-                            if isinstance(content_item, dict) and content_item.get('type') == 'tool_result':
-                                # Extract the actual GitHub data from tool result
-                                tool_content = content_item.get('content', [])
-                                if tool_content and isinstance(tool_content, list):
-                                    for item in tool_content:
-                                        if isinstance(item, dict) and item.get('type') == 'text':
-                                            github_tool_result_data = item.get('text', '')
-                                            print(f"Found GitHub tool result data!")
-                                            break
+                        # Check if this is a UserMessage with tool results
+                        if hasattr(chunk, 'content') and isinstance(chunk.content, list):
+                            print(f"Chunk has content list with {len(chunk.content)} items")
+                            for i, content_item in enumerate(chunk.content):
+                                print(f"Content item #{i}: {type(content_item)} - {content_item.get('type') if isinstance(content_item, dict) else 'N/A'}")
+                                if isinstance(content_item, dict) and content_item.get('type') == 'tool_result':
+                                    # Extract the actual GitHub data from tool result
+                                    tool_content = content_item.get('content', [])
+                                    if tool_content and isinstance(tool_content, list):
+                                        for item in tool_content:
+                                            if isinstance(item, dict) and item.get('type') == 'text':
+                                                github_tool_result_data = item.get('text', '')
+                                                print(f"Found GitHub tool result data!")
+                                                break
 
-                    github_response_text += str(chunk)
-                    print(f"Successfully processed chunk #{chunk_count}")
-                except CLIJSONDecodeError as e:
-                    print(f"  <UNK> Error parsing result summary: {e}")
-                    continue
-                except Exception as chunk_error:
-                    print(f"Error processing chunk #{chunk_count}: {chunk_error}")
-                    continue
+                        github_response_text += str(chunk)
+                        print(f"Successfully processed chunk #{chunk_count}")
+                    except CLIJSONDecodeError as e:
+                        print(f"  <UNK> Error parsing result summary: {e}")
+                        continue
+                    except Exception as chunk_error:
+                        print(f"Error processing chunk #{chunk_count}: {chunk_error}")
+                        continue
 
-            print("Finished processing GitHub async generator")
-        except Exception as e:
-            print(f"Error in GitHub async generator processing: {e}")
-            print(f"Error type: {type(e).__name__}")
-            print(f"Error args: {e.args}")
-            print(f"Processed {chunk_count} chunks before error")
+                print("Finished processing GitHub async generator")
+                break
+            except ExceptionGroup as e:
+                print(f"Error processing GitHub async generator: {e}")
+                continue
+            except Exception as e:
+                print(f"Error in GitHub async generator processing: {e}")
+                print(f"Error type: {type(e).__name__}")
+                print(f"Error args: {e.args}")
+                print(f"Processed {chunk_count} chunks before error")
 
-            # Try to get more details about the TaskGroup error
-            import traceback
-            print("Full traceback:")
-            print(traceback.format_exc())
+                # Try to get more details about the TaskGroup error
+                import traceback
+                print("Full traceback:")
+                print(traceback.format_exc())
 
-            # Re-raise to stop execution and understand the root cause
-            raise
+                # Re-raise to stop execution and understand the root cause
+                raise
 
         # Parse the final ResultMessage to get selected repositories
         selected_repos = []
@@ -409,11 +422,11 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
             import re
             import json
 
-            # Look for ResultMessage result field directly
-            result_match = re.search(r"result='(\[.*?\])'", github_response_text, re.DOTALL)
+            # Look for JSON array in the result field
+            # First try to find the entire result content
+            result_match = re.search(r"result='(.*?)'(?=\))", github_response_text, re.DOTALL)
             if not result_match:
-                # Try alternative format
-                result_match = re.search(r'result="(\[.*?\])"', github_response_text, re.DOTALL)
+                result_match = re.search(r'result="(.*?)"(?=\))', github_response_text, re.DOTALL)
 
             if result_match:
                 result_content = result_match.group(1)
@@ -423,10 +436,30 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
                 result_content = result_content.replace('\\"', '"')
                 result_content = result_content.replace('\\n', '\n')
 
-                try:
-                    # Parse the JSON directly
-                    result_data = json.loads(result_content)
-                    print(f"Successfully parsed JSON array with {len(result_data)} repositories")
+                # Now look for JSON array within the result content
+                # Try different patterns to find the JSON array
+                json_array_patterns = [
+                    r'```json\s*(\[.*?\])\s*```',  # JSON array in code blocks
+                    r'```\s*(\[.*?\])\s*```',      # Array in plain code blocks
+                    r'(\[\s*\{.*?\}\s*\])'         # Raw JSON array
+                ]
+                
+                json_data = None
+                for pattern in json_array_patterns:
+                    array_match = re.search(pattern, result_content, re.DOTALL)
+                    if array_match:
+                        json_str = array_match.group(1)
+                        print(f"Found JSON with pattern: {pattern}")
+                        try:
+                            json_data = json.loads(json_str)
+                            print(f"Successfully parsed JSON array with {len(json_data)} repositories")
+                            break
+                        except json.JSONDecodeError as e:
+                            print(f"Failed to parse with pattern {pattern}: {e}")
+                            continue
+                
+                if json_data:
+                    result_data = json_data
 
                     # Create RepositoryInfo objects
                     for repo_data in result_data:
@@ -456,10 +489,6 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
                             analysis_notes=repo_data.get("reasoning", "")
                         )
                         selected_repos.append(repo_info)
-
-                except json.JSONDecodeError as e:
-                    print(f"Error parsing JSON from ResultMessage: {e}")
-                    print(f"JSON string was: {result_content[:200]}...")
 
         print("The selected repositories are:")
         print(selected_repos)
@@ -627,104 +656,110 @@ async def generate_code(state: JiraToPRState) -> Dict:
                 files_modified = []
                 
                 print(f"Starting to process code generation for {repo.full_name}...")
-                
-                async for chunk in result_generator:
+                max_attempts = 3
+                for attempt in range(max_attempts):
                     try:
-                        chunk_count += 1
-                        print(f"\n{'='*80}")
-                        print(f"Chunk #{chunk_count}: {type(chunk).__name__}")
-                        print(f"{'='*80}")
+                        async for chunk in result_generator:
+                            try:
+                                chunk_count += 1
+                                print(f"\n{'='*80}")
+                                print(f"Chunk #{chunk_count}: {type(chunk).__name__}")
+                                print(f"{'='*80}")
 
-                        # Print full chunk content for debugging
-                        print(f"Full chunk content:\n{chunk}")
-                        # Check for tool usage
-                        if hasattr(chunk, 'content') and isinstance(chunk.content, list):
-                            print(f"  Chunk has content list with {len(chunk.content)} items")
-                            for i, content_item in enumerate(chunk.content):
-                                print(f"\n  Content item #{i}:")
-                                print(f"    Type: {type(content_item)}")
-                                if isinstance(content_item, dict):
-                                    print(f"    Dict keys: {list(content_item.keys())}")
-                                    print(f"    Content: {content_item}")
-                                    
-                                    if content_item.get('type') == 'tool_use':
-                                        tool_name = content_item.get('name', '')
-                                        print(f"    ✓ Tool used: {tool_name}")
-                                        print(f"    Tool input: {content_item.get('input', {})}")
-                                        if 'create_branch' in tool_name:
-                                            branch_created = True
-                                            print(f"    ✓ Branch {branch_name} should be created")
-                                        elif 'create_or_update_file' in tool_name or 'push_files' in tool_name:
-                                            print(f"    ✓ Files being updated")
-                                    elif content_item.get('type') == 'tool_result':
-                                        print(f"    ✓ Tool result received")
-                                        tool_content = content_item.get('content', [])
-                                        print(f"    Tool result content type: {type(tool_content)}")
-                                        if tool_content:
-                                            print(f"    Tool result content: {tool_content}")
-                                        tool_name = content_item.get('tool_use_id', '')
-                                        print(f"    Tool use ID: {tool_name}")
-                                        is_error = content_item.get('is_error', False)
-                                        if is_error:
-                                            print(f"    ⚠️ TOOL ERROR DETECTED")
-                                else:
-                                    print(f"    Non-dict content: {content_item}")
-                        
-                        # Check if this is a message type
-                        if hasattr(chunk, 'role'):
-                            print(f"  Message role: {chunk.role}")
-                        
-                        response_text += str(chunk)
-                        
-                        # Look for ResultMessage with summary
-                        if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
-                            print(f"\n✓ Found ResultMessage in chunk #{chunk_count}")
-                            if hasattr(chunk, 'result'):
-                                result_content = chunk.result
-                                print(f"  Result content: {result_content[:500]}...")  # First 500 chars
-                                
-                                # Try to extract JSON summary
-                                import re
-                                import json
-                                
-                                # Look for JSON block in the result
-                                json_match = re.search(r'```json\s*(\{.*?\})\s*```', result_content, re.DOTALL)
-                                if not json_match:
-                                    # Try without code block markers
-                                    json_match = re.search(r'\{.*?"branch_created".*?"success"\s*:\s*true.*?\}', result_content, re.DOTALL)
-                                
-                                if json_match:
-                                    try:
-                                        json_str = json_match.group(1) if '```' in result_content else json_match.group(0)
-                                        # Clean up the JSON string
-                                        json_str = json_str.strip()
-                                        result_summary = json.loads(json_str)
-                                        print(f"  ✓ Successfully parsed result summary: {result_summary}")
-                                        
-                                        # Mark branch as created if successful
-                                        if result_summary.get('success') and result_summary.get('branch_created'):
-                                            branch_created = True
-                                            print(f"  ✓ Branch {result_summary['branch_created']} was created successfully")
-                                        
-                                        if result_summary.get('files_modified'):
-                                            files_modified = result_summary['files_modified']
-                                            print(f"  Files modified: {files_modified}")
-                                    except json.JSONDecodeError as e:
-                                        print(f"  ⚠️ Error parsing result summary: {e}")
-                                        print(f"  JSON string was: {json_str}")
-                                else:
-                                    print(f"  ⚠️ No JSON summary found in result")
-                        
-                        print(f"✓ Successfully processed chunk #{chunk_count}")
-                    except CLIJSONDecodeError as e:
+                                # Print full chunk content for debugging
+                                print(f"Full chunk content:\n{chunk}")
+                                # Check for tool usage
+                                if hasattr(chunk, 'content') and isinstance(chunk.content, list):
+                                    print(f"  Chunk has content list with {len(chunk.content)} items")
+                                    for i, content_item in enumerate(chunk.content):
+                                        print(f"\n  Content item #{i}:")
+                                        print(f"    Type: {type(content_item)}")
+                                        if isinstance(content_item, dict):
+                                            print(f"    Dict keys: {list(content_item.keys())}")
+                                            print(f"    Content: {content_item}")
+
+                                            if content_item.get('type') == 'tool_use':
+                                                tool_name = content_item.get('name', '')
+                                                print(f"    ✓ Tool used: {tool_name}")
+                                                print(f"    Tool input: {content_item.get('input', {})}")
+                                                if 'create_branch' in tool_name:
+                                                    branch_created = True
+                                                    print(f"    ✓ Branch {branch_name} should be created")
+                                                elif 'create_or_update_file' in tool_name or 'push_files' in tool_name:
+                                                    print(f"    ✓ Files being updated")
+                                            elif content_item.get('type') == 'tool_result':
+                                                print(f"    ✓ Tool result received")
+                                                tool_content = content_item.get('content', [])
+                                                print(f"    Tool result content type: {type(tool_content)}")
+                                                if tool_content:
+                                                    print(f"    Tool result content: {tool_content}")
+                                                tool_name = content_item.get('tool_use_id', '')
+                                                print(f"    Tool use ID: {tool_name}")
+                                                is_error = content_item.get('is_error', False)
+                                                if is_error:
+                                                    print(f"    ⚠️ TOOL ERROR DETECTED")
+                                        else:
+                                            print(f"    Non-dict content: {content_item}")
+
+                                # Check if this is a message type
+                                if hasattr(chunk, 'role'):
+                                    print(f"  Message role: {chunk.role}")
+
+                                response_text += str(chunk)
+
+                                # Look for ResultMessage with summary
+                                if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
+                                    print(f"\n✓ Found ResultMessage in chunk #{chunk_count}")
+                                    if hasattr(chunk, 'result'):
+                                        result_content = chunk.result
+                                        print(f"  Result content: {result_content[:500]}...")  # First 500 chars
+
+                                        # Try to extract JSON summary
+                                        import re
+                                        import json
+
+                                        # Look for JSON block in the result
+                                        json_match = re.search(r'```json\s*(\{.*?\})\s*```', result_content, re.DOTALL)
+                                        if not json_match:
+                                            # Try without code block markers
+                                            json_match = re.search(r'\{.*?"branch_created".*?"success"\s*:\s*true.*?\}', result_content, re.DOTALL)
+
+                                        if json_match:
+                                            try:
+                                                json_str = json_match.group(1) if '```' in result_content else json_match.group(0)
+                                                # Clean up the JSON string
+                                                json_str = json_str.strip()
+                                                result_summary = json.loads(json_str)
+                                                print(f"  ✓ Successfully parsed result summary: {result_summary}")
+
+                                                # Mark branch as created if successful
+                                                if result_summary.get('success') and result_summary.get('branch_created'):
+                                                    branch_created = True
+                                                    print(f"  ✓ Branch {result_summary['branch_created']} was created successfully")
+
+                                                if result_summary.get('files_modified'):
+                                                    files_modified = result_summary['files_modified']
+                                                    print(f"  Files modified: {files_modified}")
+                                            except json.JSONDecodeError as e:
+                                                print(f"  ⚠️ Error parsing result summary: {e}")
+                                                print(f"  JSON string was: {json_str}")
+                                        else:
+                                            print(f"  ⚠️ No JSON summary found in result")
+
+                                print(f"✓ Successfully processed chunk #{chunk_count}")
+                            except CLIJSONDecodeError as e:
+                                print(f"  <UNK> Error parsing result summary: {e}")
+                                continue
+                            except Exception as chunk_error:
+                                print(f"⚠️ Error processing chunk #{chunk_count}: {chunk_error}")
+                                import traceback
+                                print(traceback.format_exc())
+                                continue
+                        break
+                    except ExceptionGroup as e:
                         print(f"  <UNK> Error parsing result summary: {e}")
                         continue
-                    except Exception as chunk_error:
-                        print(f"⚠️ Error processing chunk #{chunk_count}: {chunk_error}")
-                        import traceback
-                        print(traceback.format_exc())
-                        continue
-                
+
                 print(f"\nFinished processing. Total chunks: {chunk_count}")
                 print(f"Debug - branch_created: {branch_created}")
                 print(f"Debug - result_summary: {result_summary}")
@@ -831,7 +866,8 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
     """
     Create pull requests for all generated code changes using MCP.
     
-    This function:    1. Uses branches_created from generate_code to create PRs
+    This function:
+    1. Uses branches_created from generate_code to create PRs
     2. Creates pull requests using GitHub MCP create_pull_request
     3. Returns PR information for workflow tracking
     
@@ -922,70 +958,75 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                 chunk_count = 0
                 
                 print(f"Processing PR creation for {repo_full_name}...")
-                
-                async for chunk in result_generator:
+                max_attempts = 3
+                for i in range(max_attempts):
                     try:
-                        chunk_count += 1
-                        print(f"\n{'='*80}")
-                        print(f"PR chunk #{chunk_count}: {type(chunk).__name__}")
-                        print(f"{'='*80}")
+                        async for chunk in result_generator:
+                            try:
+                                chunk_count += 1
+                                print(f"\n{'='*80}")
+                                print(f"PR chunk #{chunk_count}: {type(chunk).__name__}")
+                                print(f"{'='*80}")
 
-                        # Print full chunk content for debugging
-                        print(f"Full chunk content:\n{chunk}")
-                        # Check for tool usage
-                        if hasattr(chunk, 'content') and isinstance(chunk.content, list):
-                            for content_item in chunk.content:
-                                if isinstance(content_item, dict):
-                                    if content_item.get('type') == 'tool_use' and 'create_pull_request' in content_item.get('name', ''):
-                                        print(f"  ✓ Creating pull request")
-                                        print(f"    Tool input: {content_item.get('input', {})}")
-                                    elif content_item.get('type') == 'tool_result':
-                                        print(f"  Tool result received")
-                                        # Extract PR info from tool result
-                                        tool_content = content_item.get('content', [])
-                                        if tool_content and isinstance(tool_content, list):
-                                            for item in tool_content:
-                                                if isinstance(item, dict) and item.get('type') == 'text':
-                                                    result_text = item.get('text', '')
-                                                    # Try to extract PR URL and number
-                                                    import re
-                                                    url_match = re.search(r'https://github\.com/[^/]+/[^/]+/pull/(\d+)', result_text)
-                                                    if url_match:
-                                                        pr_url = url_match.group(0)
-                                                        pr_number = int(url_match.group(1))
-                                                        print(f"  Found PR: {pr_url}")
-                        
-                        response_text += str(chunk)
-                        
-                        # Look for ResultMessage with PR info
-                        if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
-                            if hasattr(chunk, 'result'):
-                                result_content = chunk.result
-                                
-                                # Try to extract JSON result
-                                import re
-                                import json
-                                
-                                json_match = re.search(r'\{[^{}]*"success"[^{}]*\}', result_content, re.DOTALL)
-                                if json_match:
-                                    try:
-                                        json_str = json_match.group(0)
-                                        result_data = json.loads(json_str)
-                                        if result_data.get('success'):
-                                            pr_url = result_data.get('html_url', pr_url)
-                                            pr_number = result_data.get('number', pr_number)
-                                            print(f"Successfully parsed PR result")
-                                    except json.JSONDecodeError as e:
-                                        print(f"Error parsing PR result: {e}")
-                        
-                        print(f"Successfully processed chunk #{chunk_count}")
-                    except CLIJSONDecodeError as e:
-                        print(f"  <UNK> Error parsing result summary: {e}")
+                                # Print full chunk content for debugging
+                                print(f"Full chunk content:\n{chunk}")
+                                # Check for tool usage
+                                if hasattr(chunk, 'content') and isinstance(chunk.content, list):
+                                    for content_item in chunk.content:
+                                        if isinstance(content_item, dict):
+                                            if content_item.get('type') == 'tool_use' and 'create_pull_request' in content_item.get('name', ''):
+                                                print(f"  ✓ Creating pull request")
+                                                print(f"    Tool input: {content_item.get('input', {})}")
+                                            elif content_item.get('type') == 'tool_result':
+                                                print(f"  Tool result received")
+                                                # Extract PR info from tool result
+                                                tool_content = content_item.get('content', [])
+                                                if tool_content and isinstance(tool_content, list):
+                                                    for item in tool_content:
+                                                        if isinstance(item, dict) and item.get('type') == 'text':
+                                                            result_text = item.get('text', '')
+                                                            # Try to extract PR URL and number
+                                                            import re
+                                                            url_match = re.search(r'https://github\.com/[^/]+/[^/]+/pull/(\d+)', result_text)
+                                                            if url_match:
+                                                                pr_url = url_match.group(0)
+                                                                pr_number = int(url_match.group(1))
+                                                                print(f"  Found PR: {pr_url}")
+
+                                response_text += str(chunk)
+
+                                # Look for ResultMessage with PR info
+                                if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
+                                    if hasattr(chunk, 'result'):
+                                        result_content = chunk.result
+
+                                        # Try to extract JSON result
+                                        import re
+                                        import json
+
+                                        json_match = re.search(r'\{[^{}]*"success"[^{}]*\}', result_content, re.DOTALL)
+                                        if json_match:
+                                            try:
+                                                json_str = json_match.group(0)
+                                                result_data = json.loads(json_str)
+                                                if result_data.get('success'):
+                                                    pr_url = result_data.get('html_url', pr_url)
+                                                    pr_number = result_data.get('number', pr_number)
+                                                    print(f"Successfully parsed PR result")
+                                            except json.JSONDecodeError as e:
+                                                print(f"Error parsing PR result: {e}")
+
+                                print(f"Successfully processed chunk #{chunk_count}")
+                            except CLIJSONDecodeError as e:
+                                print(f"  <UNK> Error parsing result summary: {e}")
+                                continue
+                            except Exception as chunk_error:
+                                print(f"Error processing chunk #{chunk_count}: {chunk_error}")
+                                continue
+                        break
+                    except ExceptionGroup as e:
+                        print(f"Error processing chunk #{chunk_count}: {e}")
                         continue
-                    except Exception as chunk_error:
-                        print(f"Error processing chunk #{chunk_count}: {chunk_error}")
-                        continue
-                
                 print(f"\nFinished PR creation. Total chunks: {chunk_count}")
                 
                 if pr_url and pr_number:
