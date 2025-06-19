@@ -167,7 +167,6 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
         for issue in issues:
             tickets.append(_parse_jira_issue(issue, settings.jira_url))
         print(tickets)
-        raise Exception()
 
         if len(tickets) == 0:
             return {
