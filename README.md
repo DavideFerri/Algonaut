@@ -1,5 +1,7 @@
 # Jira to PR Automation
 
+**Project Owner:** Mister X
+
 A LangGraph-based agent that automates the complete workflow from Jira ticket to GitHub PR creation using AI-powered code generation.
 
 ## Overview
