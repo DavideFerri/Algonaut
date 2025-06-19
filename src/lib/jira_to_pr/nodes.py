@@ -38,155 +38,94 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
     """
     Fetch unassigned tickets from the active sprint using Claude SDK with MCP.
     """
-    try:
-        from dependencies.settings import settings
-        
-        if not CLAUDE_SDK_AVAILABLE:
-            return {
-                "error": "Claude SDK is required for MCP integration",
-                "workflow_stage": "error"
-            }
-        
-        # Configure MCP server for Jira
-        jira_server_config = McpServerConfig(
-            command="docker",
-            args=[
-                "run", "-i", "--rm",
-                "-e", "JIRA_URL",
-                "-e", "JIRA_USERNAME", 
-                "-e", "JIRA_API_TOKEN",
-                "ghcr.io/sooperset/mcp-atlassian:latest"
-            ],
-            env={
-                "JIRA_URL": settings.jira_url,
-                "JIRA_USERNAME": settings.jira_email,
-                "JIRA_API_TOKEN": settings.jira_api_token
-            }
-        )
-        
-        # Search for tickets
-        jql = f'project = {settings.jira_project_key} AND sprint in openSprints() AND assignee is EMPTY AND status = "To Do"'
-        
-        prompt = f"""
-        Use the Jira MCP server to search for issues with the following JQL:
-        {jql}
-        
-        Return the issues in JSON format with all relevant fields including:
-        - id, key, summary, description
-        - status, priority, assignee, reporter
-        - created, updated, issuetype
-        - labels, components, fixVersions, project
-        """
-        
-        # Query using Claude SDK with MCP configuration
-        result_generator = query(
-            prompt=prompt,
-            options=ClaudeCodeOptions(
-                mcp_servers={"mcp-atlassian": jira_server_config},
-                mcp_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"],
-                allowed_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"]
-            )
-        )
-        
-        # Collect all responses from the async generator
-        response_text = ""
-        tool_result_data = None
-        
-        async for chunk in result_generator:
-            print(f"\n{'='*60}")
-            print(f"Chunk type: {type(chunk).__name__}")
-            
-            # Check if this is a UserMessage with tool results
-            if hasattr(chunk, 'content') and isinstance(chunk.content, list):
-                for content_item in chunk.content:
-                    if isinstance(content_item, dict) and content_item.get('type') == 'tool_result':
-                        # Extract the actual Jira data from tool result
-                        tool_content = content_item.get('content', [])
-                        if tool_content and isinstance(tool_content, list):
-                            for item in tool_content:
-                                if isinstance(item, dict) and item.get('type') == 'text':
-                                    tool_result_data = item.get('text', '')
-                                    print(f"Found tool result data!")
-                                    break
-            
-            # Accumulate all text for fallback parsing
-            response_text += str(chunk)
-        
-        print(f"\n{'='*60}")
-        print("Parsing Jira response...")
-        
-        # Parse the result - prefer tool result data if available
-        import json
-        issues = []
-        
-        if tool_result_data:
-            try:
-                print(f"Parsing tool result data...")
-                jira_response = json.loads(tool_result_data)
-                if isinstance(jira_response, dict) and 'issues' in jira_response:
-                    issues = jira_response['issues']
-                    print(f"Found {len(issues)} issues in tool result")
-            except json.JSONDecodeError as e:
-                print(f"Failed to parse tool result data: {e}")
-        
-        # Fallback: Check if the response indicates no issues found
-        if not issues and ("No issues found" in response_text or "0 results" in response_text):
-            issues = []
-        elif not issues:
-            # Look for JSON in the response
-            json_start = response_text.find('[')
-            json_end = response_text.rfind(']') + 1
-            
-            # Also check for object format
-            if json_start < 0:
-                json_start = response_text.find('{')
-                json_end = response_text.rfind('}') + 1
-
-            if json_start >= 0 and json_end > json_start:
-                json_text = response_text[json_start:json_end]
-                try:
-                    issues_data = json.loads(json_text)
-                    
-                    # Handle different possible response formats
-                    if isinstance(issues_data, dict):
-                        if "issues" in issues_data:
-                            issues = issues_data["issues"]
-                        else:
-                            issues = [issues_data]
-                    elif isinstance(issues_data, list):
-                        issues = issues_data
-                    else:
-                        issues = []
-                except json.JSONDecodeError:
-                    issues = []
-            else:
-                issues = []
-
-        # Parse tickets using the helper function
-        tickets = []
-        for issue in issues:
-            tickets.append(_parse_jira_issue(issue, settings.jira_url))
-        print(tickets)
-
-        if len(tickets) == 0:
-            return {
-                "available_tickets": [],
-                "workflow_stage": "no_tickets",
-                "messages": [AIMessage(content="No unassigned tickets found in active sprint")]
-            }
-        
-        return {
-            "available_tickets": tickets,
-            "workflow_stage": "tickets_fetched",
-            "messages": [AIMessage(content=f"Found {len(tickets)} unassigned tickets from Jira")]
-        }
-        
-    except Exception as e:
-        return {
-            "error": str(e),
-            "workflow_stage": "error",
-            "messages": [AIMessage(content=f"Error fetching tickets: {str(e)}")]
-        }
+    # Temporarily return mock data for testing
+    from datetime import datetime, timezone, timedelta
+    
+    mock_ticket = TicketData(
+        id='16871', 
+        key='MAPM-2464', 
+        summary='Algonaut issue',
+        description='Please improve the .README',
+        status='To Do', 
+        priority='Medium', 
+        assignee=None, 
+        reporter='Davide Biagio Ferri', 
+        created=datetime(2025, 6, 8, 22, 39, 50, 201000, tzinfo=timezone(timedelta(seconds=7200))), 
+        updated=datetime(2025, 6, 19, 10, 24, 10, 207000, tzinfo=timezone(timedelta(seconds=7200))), 
+        ticket_type='Story', 
+        labels=[], 
+        components=[], 
+        fix_versions=[], 
+        project_key='MAPM', 
+        url='https://tamarix.atlassian.net/browse/MAPM-2464', 
+        acceptance_criteria=None, 
+        story_points=4.0
+    )
+    
+    return {
+        "available_tickets": [mock_ticket],
+        "workflow_stage": "tickets_fetched",
+        "messages": [AIMessage(content="Found 1 mock ticket for testing")]
+    }
+    
+    # Commented out original Jira MCP code
+    # try:
+    #     from dependencies.settings import settings
+    #     
+    #     if not CLAUDE_SDK_AVAILABLE:
+    #         return {
+    #             "error": "Claude SDK is required for MCP integration",
+    #             "workflow_stage": "error"
+    #         }
+    #     
+    #     # Configure MCP server for Jira
+    #     jira_server_config = McpServerConfig(
+    #         command="docker",
+    #         args=[
+    #             "run", "-i", "--rm",
+    #             "-e", "JIRA_URL",
+    #             "-e", "JIRA_USERNAME", 
+    #             "-e", "JIRA_API_TOKEN",
+    #             "ghcr.io/sooperset/mcp-atlassian:latest"
+    #         ],
+    #         env={
+    #             "JIRA_URL": settings.jira_url,
+    #             "JIRA_USERNAME": settings.jira_email,
+    #             "JIRA_API_TOKEN": settings.jira_api_token
+    #         }
+    #     )
+    #     
+    #     # Search for tickets
+    #     jql = f'project = {settings.jira_project_key} AND sprint in openSprints() AND assignee is EMPTY AND status = "To Do"'
+    #     
+    #     prompt = f"""
+    #     Use the Jira MCP server to search for issues with the following JQL:
+    #     {jql}
+    #     
+    #     Return the issues in JSON format with all relevant fields including:
+    #     - id, key, summary, description
+    #     - status, priority, assignee, reporter
+    #     - created, updated, issuetype
+    #     - labels, components, fixVersions, project
+    #     """
+    #     
+    #     # Query using Claude SDK with MCP configuration
+    #     result_generator = query(
+    #         prompt=prompt,
+    #         options=ClaudeCodeOptions(
+    #             mcp_servers={"mcp-atlassian": jira_server_config},
+    #             mcp_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"],
+    #             allowed_tools=["mcp__mcp-atlassian__jira_search", "mcp__mcp-atlassian__jira_get_issue"]
+    #         )
+    #     )
+    #     
+    #     # Rest of the original implementation...
+    # except Exception as e:
+    #     return {
+    #         "error": str(e),
+    #         "workflow_stage": "error",
+    #         "messages": [AIMessage(content=f"Error fetching tickets: {str(e)}")]
+    #     }
 
 
 async def select_ticket(state: JiraToPRState) -> Dict:
@@ -255,114 +194,199 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
         
         from dependencies.settings import settings
         
-        # TODO: Replace with actual GitHub MCP integration
-        # For now, using mock repository data
-        repo_data_list = [
-            {
-                "name": "example-repo",
-                "full_name": f"{settings.github_user or 'user'}/example-repo",
-                "html_url": f"https://github.com/{settings.github_user or 'user'}/example-repo",
-                "clone_url": f"https://github.com/{settings.github_user or 'user'}/example-repo.git",
-                "ssh_url": f"git@github.com:{settings.github_user or 'user'}/example-repo.git",
-                "default_branch": "main",
-                "language": "Python",
-                "languages": {"Python": 1000},
-                "fork": False,
-                "archived": False
+        # Configure GitHub MCP server
+        github_server_config = McpServerConfig(
+            command="docker",
+            args=[
+                "run", "-i", "--rm",
+                "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+                "ghcr.io/github/github-mcp-server"
+            ],
+            env={
+                "GITHUB_PERSONAL_ACCESS_TOKEN": settings.github_token
             }
-        ]
+        )
         
-        if not repo_data_list:
-            return {
-                "error": "No accessible repositories found",
-                "workflow_stage": "error",
-                "messages": [AIMessage(content="No accessible repositories found")]
-            }
+        # Step 1: Search all repositories using GitHub MCP
+        print("Starting GitHub repository search...")
         
-        # Convert to RepositoryInfo objects
-        all_repositories = []
-        for repo_data in repo_data_list:
-            if not repo_data.get("fork", False) and not repo_data.get("archived", False):
-                repo_info = RepositoryInfo(
-                    name=repo_data["name"],
-                    full_name=repo_data["full_name"],
-                    url=repo_data["html_url"],
-                    clone_url=repo_data["clone_url"],
-                    ssh_url=repo_data["ssh_url"],
-                    default_branch=repo_data.get("default_branch", "main"),
-                    primary_language=repo_data.get("language"),
-                    languages=repo_data.get("languages", {})
-                )
-                all_repositories.append(repo_info)
+        # Search for user's repositories - minimal to avoid JSON truncation
+        github_user = settings.github_user or "davideferri"
+        search_repos_prompt = f"""
+        You are AI software architect that needs to understand what repositories are relevant to your ticket.
         
-        # Use AI to analyze repository relevance
-        analysis_prompt = f"""
-            Analyze which repositories are most relevant for this Jira ticket:
+        Analyse up to 3 repository of user:{github_user} and understand from its name whether it is relevant or not for your ticket.
+        
+        For 1 <= i <= 10, do the following:
+            Query the search_repositories as follows:
+                - query: "user:{github_user}"
+                - page: i
+                - perPage: 1
+                - sort: descending
+        
+            After getting the results, extract and return ONLY these fields for the repository:
+            - name
+            - full_name  
+            - url
+            - default_branch
+            - language
+        
+            Check whether the repository is relevant (assign a 0 to 1 relevance score) for your Jira ticket based on the ticket description and repository name:
             
             Ticket: {state.current_ticket.key} - {state.current_ticket.summary}
             Description: {state.current_ticket.description}
             Components: {', '.join(state.current_ticket.components)}
             Labels: {', '.join(state.current_ticket.labels)}
             
-            Available repositories:
-            {chr(10).join([f"- {repo.name} ({repo.primary_language}): {repo.url}" for repo in all_repositories[:10]])}
-            
-            Return the top 3 most relevant repositories as a JSON list with format:
-            [{{"name": "repo_name", "relevance_score": 0.8, "reasoning": "why relevant"}}]
-            
-            Only include repositories with relevance_score > 0.3
-            """
+        Return the top 1 most relevant repositories as a JSON list with format:
+            [{{
+            "name": "repo_name", 
+            "full_name": "repo_full_name",
+            "url":"repo_url",
+            "language":"repo_language",
+            "default_branch":"repo_default_branch",
+            "relevance_score": "relevance_score between 0 and 1", 
+            "reasoning": "why relevant based on ticket description and repo name"}}]
+        """
         
-        response = await llm.ainvoke([
-            SystemMessage(content="You are a repository analyst. Return only valid JSON."),
-            HumanMessage(content=analysis_prompt)
-        ])
+        print(f"Creating GitHub MCP query with config: {github_server_config}")
         
-        # Parse AI response
         try:
-            import json
-            analysis_results = json.loads(response.content)
-            
-            # Select relevant repositories
-            relevant_repos = []
-            for result in analysis_results:
-                repo_name = result.get("name")
-                relevance_score = result.get("relevance_score", 0)
+            github_result_generator = query(
+                prompt=search_repos_prompt,
+                options=ClaudeCodeOptions(
+                    mcp_servers={"github": github_server_config},
+                    mcp_tools=["mcp__github__search_repositories", "mcp__github__get_file_contents"],
+                    allowed_tools=["mcp__github__search_repositories", "mcp__github__get_file_contents"]
+                )
+            )
+            print("GitHub query created successfully")
+        except Exception as e:
+            print(f"Error creating GitHub query: {e}")
+            raise
+        
+        # Collect GitHub response
+        github_response_text = ""
+        github_tool_result_data = None
+        
+        print("Starting to process GitHub async generator...")
+        
+        chunk_count = 0
+        try:
+            async for chunk in github_result_generator:
+                chunk_count += 1
+                print(f"\nGitHub chunk #{chunk_count}: {type(chunk).__name__}")
                 
-                if relevance_score > 0.3:
-                    repo = next((r for r in all_repositories if r.name == repo_name), None)
-                    if repo:
-                        repo.local_path = f"/tmp/repos/{repo.name}"
-                        relevant_repos.append(repo)
+                try:
+                    # Print chunk content for debugging
+                    print(f"Chunk content: {chunk}")
+                    
+                    # Check if this is a UserMessage with tool results
+                    if hasattr(chunk, 'content') and isinstance(chunk.content, list):
+                        print(f"Chunk has content list with {len(chunk.content)} items")
+                        for i, content_item in enumerate(chunk.content):
+                            print(f"Content item #{i}: {type(content_item)} - {content_item.get('type') if isinstance(content_item, dict) else 'N/A'}")
+                            if isinstance(content_item, dict) and content_item.get('type') == 'tool_result':
+                                # Extract the actual GitHub data from tool result
+                                tool_content = content_item.get('content', [])
+                                if tool_content and isinstance(tool_content, list):
+                                    for item in tool_content:
+                                        if isinstance(item, dict) and item.get('type') == 'text':
+                                            github_tool_result_data = item.get('text', '')
+                                            print(f"Found GitHub tool result data!")
+                                            break
+                    
+                    github_response_text += str(chunk)
+                    print(f"Successfully processed chunk #{chunk_count}")
+                except Exception as chunk_error:
+                    print(f"Error processing chunk #{chunk_count}: {chunk_error}")
+                    continue
             
-            if not relevant_repos:
-                return {
-                    "error": "No relevant repositories found for this ticket",
-                    "workflow_stage": "error",
-                    "messages": [AIMessage(content="No relevant repositories found for this ticket")]
-                }
+            print("Finished processing GitHub async generator")
+        except Exception as e:
+            print(f"Error in GitHub async generator processing: {e}")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error args: {e.args}")
+            print(f"Processed {chunk_count} chunks before error")
             
-            return {
-                "selected_repositories": relevant_repos,
-                "workflow_stage": "repositories_analyzed",
-                "messages": [
-                    AIMessage(content=f"Selected {len(relevant_repos)} relevant repositories: {', '.join([r.name for r in relevant_repos])}")
-                ]
-            }
+            # Try to get more details about the TaskGroup error
+            import traceback
+            print("Full traceback:")
+            print(traceback.format_exc())
             
-        except json.JSONDecodeError:
-            # Fallback: select first few repositories
-            relevant_repos = all_repositories[:3]
-            for repo in relevant_repos:
-                repo.local_path = f"/tmp/repos/{repo.name}"
+            # Re-raise to stop execution and understand the root cause
+            raise
+        
+        # Parse the final ResultMessage to get selected repositories
+        selected_repos = []
+        
+        # Extract JSON from the response text that contains ResultMessage
+        if github_response_text and 'ResultMessage' in github_response_text:
+            import re
+            import json
             
-            return {
-                "selected_repositories": relevant_repos,
-                "workflow_stage": "repositories_analyzed",
-                "messages": [
-                    AIMessage(content=f"Selected {len(relevant_repos)} repositories (fallback selection)")
-                ]
-            }
+            # Look for the result attribute content - handle escaped quotes
+            result_match = re.search(r"result='(.*?)'(?:,|\))", github_response_text, re.DOTALL)
+            if result_match:
+                result_content = result_match.group(1)
+                
+                # Replace escaped quotes
+                result_content = result_content.replace("\\'", "'")
+                
+                # Find the JSON array in the result content
+                json_match = re.search(r'\[\s*\{[^}]+\}\s*\]', result_content)
+                if json_match:
+                    json_str = json_match.group(0)
+                    try:
+                        # Parse the JSON - handle escaped newlines
+                        print(f"Found JSON: {json_str}")
+                        # Replace escaped newlines with actual newlines for proper JSON parsing
+                        json_str_clean = json_str.replace('\\n', '\n')
+                        result_data = json.loads(json_str_clean)
+                        
+                        # Create RepositoryInfo objects
+                        for repo_data in result_data:
+                            repo_name = repo_data.get("name", "")
+                            repo_full_name = repo_data.get("full_name", "")
+                            repo_url = repo_data.get("url", "")
+                            
+                            # Parse relevance score as float
+                            relevance_score_str = repo_data.get("relevance_score", "0.0")
+                            try:
+                                relevance_score = float(relevance_score_str)
+                            except ValueError:
+                                relevance_score = 0.0
+                            
+                            repo_info = RepositoryInfo(
+                                name=repo_name,
+                                full_name=repo_full_name,
+                                url=repo_url,
+                                clone_url=repo_url + ".git" if repo_url else "",
+                                ssh_url=f"git@github.com:{repo_full_name}.git" if repo_full_name else "",
+                                default_branch=repo_data.get("default_branch", "main"),
+                                path_to_local_repo=repo_data.get("path_to_local_repo", None),
+                                primary_language=repo_data.get("language", None),
+                                languages={},
+                                relevance_score=relevance_score,
+                                relevance_reasoning=repo_data.get("reasoning", ""),
+                                analysis_notes=repo_data.get("reasoning", "")
+                            )
+                            selected_repos.append(repo_info)
+                            
+                    except json.JSONDecodeError as e:
+                        print(f"Error parsing JSON from ResultMessage: {e}")
+                        print(f"JSON string was: {json_str}")
+                        print(f"Clean JSON string was: {json_str_clean}")
+        
+        print("The selected repositories are:")
+        print(selected_repos)
+        return {
+            "selected_repositories": selected_repos,
+            "workflow_stage": "repositories_analyzed",
+            "messages": [
+                AIMessage(content=f"Selected {len(selected_repos)} repositories for code generation")
+            ]
+        }
         
     except Exception as e:
         return {
@@ -377,17 +401,17 @@ async def generate_code(state: JiraToPRState) -> Dict:
     Generate code changes for the selected ticket and repositories.
     
     This function:
-    1. Creates code generation requests for each selected repository
-    2. Uses Claude Code SDK to generate appropriate code changes
-    3. Collects all generated changes
-    4. Creates branches for each repository using GitHub MCP
+    1. Creates a new branch for each repository
+    2. Uses Claude Code SDK with GitHub MCP to analyze repository structure
+    3. Generates and commits code changes directly to the branch
+    4. Returns information about branches created and files changed
     
     Args:
         state: Current workflow state with ticket and selected repositories
         
     Returns:
         Dict containing:
-            - code_changes: List of CodeChange objects
+            - code_changes: List of CodeChange objects with branch info
             - workflow_stage: Updated to "code_generated"
             - messages: Generation results
     """
@@ -398,96 +422,283 @@ async def generate_code(state: JiraToPRState) -> Dict:
                 "workflow_stage": "error"
             }
         
-        # Try to import Claude Code SDK
-        try:
-            from claude_code_sdk import query, ClaudeCodeOptions
-            CLAUDE_CODE_SDK_AVAILABLE = True
-        except ImportError:
-            CLAUDE_CODE_SDK_AVAILABLE = False
-        
-        if not CLAUDE_CODE_SDK_AVAILABLE:
-            return {
-                "error": "Claude Code SDK is required for code generation",
-                "workflow_stage": "error"
-            }
-        
         from dependencies.settings import settings
-        all_changes = []
         
-        # TODO: Replace with actual GitHub MCP integration for branch creation
-        # For now, we'll simulate branch creation
+        # Configure GitHub MCP server
+        github_server_config = McpServerConfig(
+            command="docker",
+            args=[
+                "run", "-i", "--rm",
+                "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+                "ghcr.io/github/github-mcp-server"
+            ],
+            env={
+                "GITHUB_PERSONAL_ACCESS_TOKEN": settings.github_token
+            }
+        )
+        
+        all_changes = []
+        branches_created = []
         
         for repo in state.selected_repositories:
+            print(f"\n{'='*60}")
+            print(f"Processing repository: {repo.full_name}")
+            print(f"{'='*60}")
+            
+            # Parse owner and repo name from full_name
+            owner, repo_name = repo.full_name.split('/')
+            
+            # Create feature branch name
+            branch_name = f"{DEFAULT_BRANCH_PREFIX}{state.current_ticket.key.lower()}"
+            
+            # Generate code using Claude SDK with GitHub MCP
+            code_generation_prompt = f"""
+            You are an expert software engineer tasked with implementing the following Jira ticket:
+            
+            Ticket: {state.current_ticket.key} - {state.current_ticket.summary}
+            Description: {state.current_ticket.description}
+            
+            Repository: {repo.full_name}
+            Primary Language: {repo.primary_language}
+            
+            Your task:
+            1. First, get the default branch SHA to create a new branch from:
+               - Use get_file_contents with owner: {owner}, repo: {repo_name}, path: "" (empty string for root)
+               - Extract the SHA from the response
+            
+            2. Create a new branch named "{branch_name}" using create_branch:
+               - owner: {owner}
+               - repo: {repo_name}
+               - branch: {branch_name}
+               - sha: (use the SHA from step 1)
+            
+            3. Explore the repository structure using get_file_contents:
+               - Look for README files to understand the project
+               - Identify files that need to be modified for: "{state.current_ticket.description}"
+            
+            4. For each file that needs to be modified:
+               - Use get_file_contents to read the current content
+               - Generate the improved/modified content
+               - Use create_or_update_file to commit the changes:
+                 - owner: {owner}
+                 - repo: {repo_name}
+                 - path: (file path)
+                 - message: "[{state.current_ticket.key}] Update (file name)"
+                 - content: (new content)
+                 - branch: {branch_name}
+               - If there are a lot of changes to be made, please put them in batches and call create_or_update_file on 
+               the same file multiple times.
+            
+            Important:
+            - Only modify files that are directly relevant to the ticket
+            - Follow existing code style and patterns
+            - Make sure all changes are committed to the branch {branch_name}
+            
+            At the end, return a summary of what was done as JSON:
+            {{
+                "branch_created": "{branch_name}",
+                "files_modified": [
+                    {{
+                        "path": "file/path",
+                        "description": "what was changed"
+                    }}
+                ],
+                "success": true
+            }}
+            """
+            
+            print(f"Creating branch and generating code for {repo.full_name}")
+            
             try:
-                # Ensure repository is available locally
-                await _ensure_repository_cloned(repo)
-                
-                # Create feature branch using GitHub MCP
-                branch_name = f"{DEFAULT_BRANCH_PREFIX}{state.current_ticket.key.lower()}"
-                
-                # TODO: Create actual branch via GitHub API or MCP
-                print(f"Would create branch {branch_name} for {repo.full_name}")
-                
-                # Generate code using Claude Code SDK
-                code_prompt = f"""
-                Implement the following Jira ticket requirements:
-                
-                Ticket: {state.current_ticket.key} - {state.current_ticket.summary}
-                Description: {state.current_ticket.description}
-                
-                Repository: {repo.name}
-                Primary Language: {repo.primary_language}
-                
-                Requirements:
-                - Follow existing code patterns
-                - Include error handling
-                - Add appropriate tests
-                - Update documentation if needed
-                
-                Please analyze the repository structure and implement the necessary changes.
-                """
-                
-                # Use Claude Code SDK to generate code
-                options = ClaudeCodeOptions(
-                    directory=repo.local_path or f"/tmp/repos/{repo.name}",
-                    model="claude-3-5-sonnet-20241022"
+                # Query using Claude SDK with GitHub MCP
+                result_generator = query(
+                    prompt=code_generation_prompt,
+                    options=ClaudeCodeOptions(
+                        mcp_servers={"github": github_server_config},
+                        mcp_tools=[
+                            "mcp__github__get_file_contents",
+                            "mcp__github__create_branch",
+                            "mcp__github__create_or_update_file",
+                            "mcp__github__push_files",
+                            "mcp__github__get_commit",
+                            "mcp__github__list_branches",
+                            "mcp__github__search_code"
+                        ],
+                        allowed_tools=[
+                            "mcp__github__get_file_contents",
+                            "mcp__github__create_branch", 
+                            "mcp__github__create_or_update_file",
+                            "mcp__github__push_files",
+                            "mcp__github__get_commit",
+                            "mcp__github__list_branches",
+                            "mcp__github__search_code"
+                        ]
+                    )
                 )
                 
-                result = await query(code_prompt, options)
+                # Process the async generator to collect the response
+                response_text = ""
+                result_summary = None
+                chunk_count = 0
+                branch_created = False
+                files_modified = []
                 
-                if result:
-                    # Create a CodeChange object for the generated code
-                    change = CodeChange(
-                        file_path=f"{repo.name}/generated_changes.py",
-                        original_content="",
-                        new_content=str(result),
-                        change_type="modification",
-                        description=f"Generated code changes for {state.current_ticket.key}",
-                        repository=repo.full_name,
-                        branch=branch_name,
-                        complexity_score=5  # Default complexity score
-                    )
+                print(f"Starting to process code generation for {repo.full_name}...")
+                
+                async for chunk in result_generator:
+                    chunk_count += 1
+                    print(f"\n{'='*80}")
+                    print(f"Chunk #{chunk_count}: {type(chunk).__name__}")
+                    print(f"{'='*80}")
                     
-                    all_changes.append(change)
-                else:
-                    print(f"No code generated for repository {repo.name}")
+                    # Print full chunk content for debugging
+                    print(f"Full chunk content:\n{chunk}")
+                    
+                    try:
+                        # Check for tool usage
+                        if hasattr(chunk, 'content') and isinstance(chunk.content, list):
+                            print(f"  Chunk has content list with {len(chunk.content)} items")
+                            for i, content_item in enumerate(chunk.content):
+                                print(f"\n  Content item #{i}:")
+                                print(f"    Type: {type(content_item)}")
+                                if isinstance(content_item, dict):
+                                    print(f"    Dict keys: {list(content_item.keys())}")
+                                    print(f"    Content: {content_item}")
+                                    
+                                    if content_item.get('type') == 'tool_use':
+                                        tool_name = content_item.get('name', '')
+                                        print(f"    ✓ Tool used: {tool_name}")
+                                        print(f"    Tool input: {content_item.get('input', {})}")
+                                        if 'create_branch' in tool_name:
+                                            branch_created = True
+                                            print(f"    ✓ Branch {branch_name} should be created")
+                                        elif 'create_or_update_file' in tool_name or 'push_files' in tool_name:
+                                            print(f"    ✓ Files being updated")
+                                    elif content_item.get('type') == 'tool_result':
+                                        print(f"    ✓ Tool result received")
+                                        tool_content = content_item.get('content', [])
+                                        print(f"    Tool result content type: {type(tool_content)}")
+                                        if tool_content:
+                                            print(f"    Tool result content: {tool_content}")
+                                        tool_name = content_item.get('tool_use_id', '')
+                                        print(f"    Tool use ID: {tool_name}")
+                                        is_error = content_item.get('is_error', False)
+                                        if is_error:
+                                            print(f"    ⚠️ TOOL ERROR DETECTED")
+                                else:
+                                    print(f"    Non-dict content: {content_item}")
+                        
+                        # Check if this is a message type
+                        if hasattr(chunk, 'role'):
+                            print(f"  Message role: {chunk.role}")
+                        
+                        response_text += str(chunk)
+                        
+                        # Look for ResultMessage with summary
+                        if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
+                            print(f"\n✓ Found ResultMessage in chunk #{chunk_count}")
+                            if hasattr(chunk, 'result'):
+                                result_content = chunk.result
+                                print(f"  Result content: {result_content[:500]}...")  # First 500 chars
+                                
+                                # Try to extract JSON summary
+                                import re
+                                import json
+                                
+                                # Look for JSON block in the result
+                                json_match = re.search(r'```json\s*(\{[^}]+\})\s*```', result_content, re.DOTALL)
+                                if not json_match:
+                                    # Try without code block markers
+                                    json_match = re.search(r'\{[^{}]*"branch_created"[^{}]*"success"\s*:\s*true[^{}]*\}', result_content, re.DOTALL)
+                                
+                                if json_match:
+                                    try:
+                                        json_str = json_match.group(1) if '```' in result_content else json_match.group(0)
+                                        # Clean up the JSON string
+                                        json_str = json_str.strip()
+                                        result_summary = json.loads(json_str)
+                                        print(f"  ✓ Successfully parsed result summary: {result_summary}")
+                                        
+                                        # Mark branch as created if successful
+                                        if result_summary.get('success') and result_summary.get('branch_created'):
+                                            branch_created = True
+                                            print(f"  ✓ Branch {result_summary['branch_created']} was created successfully")
+                                        
+                                        if result_summary.get('files_modified'):
+                                            files_modified = result_summary['files_modified']
+                                            print(f"  Files modified: {files_modified}")
+                                    except json.JSONDecodeError as e:
+                                        print(f"  ⚠️ Error parsing result summary: {e}")
+                                        print(f"  JSON string was: {json_str}")
+                                else:
+                                    print(f"  ⚠️ No JSON summary found in result")
+                        
+                        print(f"✓ Successfully processed chunk #{chunk_count}")
+                    except Exception as chunk_error:
+                        print(f"⚠️ Error processing chunk #{chunk_count}: {chunk_error}")
+                        import traceback
+                        print(traceback.format_exc())
+                        continue
+                
+                print(f"\nFinished processing. Total chunks: {chunk_count}")
+                print(f"Debug - branch_created: {branch_created}")
+                print(f"Debug - result_summary: {result_summary}")
+                if result_summary:
+                    print(f"Debug - result_summary.get('success'): {result_summary.get('success')}")
+                
+                # Record the branch that was created
+                if branch_created or (result_summary and result_summary.get('success')):
+                    # Get the actual branch name from the result if available
+                    actual_branch_name = branch_name
+                    if result_summary and result_summary.get('branch_created'):
+                        actual_branch_name = result_summary['branch_created']
+                    
+                    # Extract files modified information for PR description
+                    files_description = ""
+                    if result_summary and result_summary.get('files_modified'):
+                        file_descriptions = []
+                        for file_info in result_summary['files_modified']:
+                            file_path = file_info.get('path', '')
+                            description = file_info.get('description', '')
+                            if file_path and description:
+                                file_descriptions.append(f"- {file_path}: {description}")
+                        if file_descriptions:
+                            files_description = "\n".join(file_descriptions)
+                    
+                    branches_created.append({
+                        "repository": repo.full_name,
+                        "branch": actual_branch_name,
+                        "changes_description": files_description
+                    })
+                    print(f"✓ Recorded branch creation: {repo.full_name} -> {actual_branch_name}")
                     
             except Exception as e:
                 print(f"Error processing repository {repo.name}: {e}")
+                import traceback
+                print(traceback.format_exc())
                 continue
         
-        if not all_changes:
+        if not branches_created:
             return {
-                "error": "No code changes generated",
+                "error": "No branches were created",
                 "workflow_stage": "error",
-                "messages": [AIMessage(content="No code changes were generated")]
+                "messages": [AIMessage(content="Failed to create branches for code changes")]
             }
+        
+        print(f"\n{'='*60}")
+        print(f"Summary:")
+        print(f"  Branches created: {len(branches_created)}")
+        print(f"  Total files modified: {len(all_changes)}")
+        for branch_info in branches_created:
+            print(f"  - {branch_info['repository']}: {branch_info['branch']}")
+        raise Exception("")
         
         return {
             "code_changes": all_changes,
+            "branches_created": branches_created,
             "workflow_stage": "code_generated",
             "messages": [
-                AIMessage(content=f"Generated {len(all_changes)} code changes across {len(state.selected_repositories)} repositories")
+                AIMessage(content=f"Created {len(branches_created)} branches with {len(all_changes)} file changes")
             ]
         }
         
@@ -503,11 +714,9 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
     """
     Create pull requests for all generated code changes using MCP.
     
-    This function:
-    1. Groups code changes by repository
-    2. Creates pull requests for each repository with changes using GitHub MCP
-    3. Links PRs back to the Jira ticket using Jira MCP
-    4. Updates ticket status
+    This function:    1. Uses branches_created from generate_code to create PRs
+    2. Creates pull requests using GitHub MCP create_pull_request
+    3. Returns PR information for workflow tracking
     
     Args:
         state: Current workflow state with code changes
@@ -520,57 +729,159 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
             - messages: PR creation results
     """
     try:
-        if not state.code_changes or not state.current_ticket:
+        if not state.branches_created or not state.current_ticket:
             return {
-                "error": "Missing code changes or ticket for PR creation",
+                "error": "Missing branches or ticket for PR creation",
                 "workflow_stage": "error"
             }
         
         from dependencies.settings import settings
+        
+        # Configure GitHub MCP server
+        github_server_config = McpServerConfig(
+            command="docker",
+            args=[
+                "run", "-i", "--rm",
+                "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+                "ghcr.io/github/github-mcp-server"
+            ],
+            env={
+                "GITHUB_PERSONAL_ACCESS_TOKEN": settings.github_token
+            }
+        )
+        
         created_prs = []
         
-        # Group changes by repository
-        changes_by_repo = {}
-        for change in state.code_changes:
-            repo_name = getattr(change, 'repository', '')
-            if repo_name not in changes_by_repo:
-                changes_by_repo[repo_name] = []
-            changes_by_repo[repo_name].append(change)
-        
-        # TODO: Replace with actual GitHub and Jira MCP integration
-        # For now, create mock PR data to test the workflow
-        for repo_name, changes in changes_by_repo.items():
+        # Create PRs for each branch that was created
+        for branch_info in state.branches_created:
             try:
-                # Get branch name from first change
-                branch_name = getattr(changes[0], 'branch', f"{DEFAULT_BRANCH_PREFIX}{state.current_ticket.key.lower()}")
+                repo_full_name = branch_info['repository']
+                branch_name = branch_info['branch']
+                owner, repo_name = repo_full_name.split('/')
                 
-                # Generate PR body
-                pr_body = _generate_pr_body(state.current_ticket, changes)
+                # Generate PR body with changes description from branch info
+                changes_description = branch_info.get('changes_description', '')
+                pr_body = _generate_pr_body(state.current_ticket, changes_description)
                 
-                # TODO: Create actual PR via GitHub API or MCP
-                # For now, create mock PR data
-                result = {
-                    "success": True,
-                    "html_url": f"https://github.com/{repo_name}/pull/123",
-                    "number": 123
-                }
+                # Create PR using GitHub MCP
+                pr_prompt = f"""
+                Create a pull request using the following details:
                 
-                if result.get("success"):
+                Use create_pull_request with:
+                - owner: {owner}
+                - repo: {repo_name}
+                - title: "[{state.current_ticket.key}] {state.current_ticket.summary}"
+                - body: {pr_body}
+                - head: {branch_name}
+                - base: main
+                
+                Return the result as JSON:
+                {{
+                    "success": true,
+                    "html_url": "(the PR URL)",
+                    "number": (the PR number),
+                    "title": "(the PR title)"
+                }}
+                """
+                
+                print(f"Creating PR for {repo_full_name} from branch {branch_name}")
+                
+                # Query using Claude SDK with GitHub MCP
+                result_generator = query(
+                    prompt=pr_prompt,
+                    options=ClaudeCodeOptions(
+                        mcp_servers={"github": github_server_config},
+                        mcp_tools=["mcp__github__create_pull_request"],
+                        allowed_tools=["mcp__github__create_pull_request"]
+                    )
+                )
+                
+                # Process the async generator
+                response_text = ""
+                pr_url = None
+                pr_number = None
+                chunk_count = 0
+                
+                print(f"Processing PR creation for {repo_full_name}...")
+                
+                async for chunk in result_generator:
+                    chunk_count += 1
+                    print(f"\nPR chunk #{chunk_count}: {type(chunk).__name__}")
+                    
+                    try:
+                        # Check for tool usage
+                        if hasattr(chunk, 'content') and isinstance(chunk.content, list):
+                            for content_item in chunk.content:
+                                if isinstance(content_item, dict):
+                                    if content_item.get('type') == 'tool_use' and 'create_pull_request' in content_item.get('name', ''):
+                                        print(f"  ✓ Creating pull request")
+                                    elif content_item.get('type') == 'tool_result':
+                                        print(f"  Tool result received")
+                                        # Extract PR info from tool result
+                                        tool_content = content_item.get('content', [])
+                                        if tool_content and isinstance(tool_content, list):
+                                            for item in tool_content:
+                                                if isinstance(item, dict) and item.get('type') == 'text':
+                                                    result_text = item.get('text', '')
+                                                    # Try to extract PR URL and number
+                                                    import re
+                                                    url_match = re.search(r'https://github\.com/[^/]+/[^/]+/pull/(\d+)', result_text)
+                                                    if url_match:
+                                                        pr_url = url_match.group(0)
+                                                        pr_number = int(url_match.group(1))
+                                                        print(f"  Found PR: {pr_url}")
+                        
+                        response_text += str(chunk)
+                        
+                        # Look for ResultMessage with PR info
+                        if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
+                            if hasattr(chunk, 'result'):
+                                result_content = chunk.result
+                                
+                                # Try to extract JSON result
+                                import re
+                                import json
+                                
+                                json_match = re.search(r'\{[^{}]*"success"[^{}]*\}', result_content, re.DOTALL)
+                                if json_match:
+                                    try:
+                                        json_str = json_match.group(0)
+                                        result_data = json.loads(json_str)
+                                        if result_data.get('success'):
+                                            pr_url = result_data.get('html_url', pr_url)
+                                            pr_number = result_data.get('number', pr_number)
+                                            print(f"Successfully parsed PR result")
+                                    except json.JSONDecodeError as e:
+                                        print(f"Error parsing PR result: {e}")
+                        
+                        print(f"Successfully processed chunk #{chunk_count}")
+                    except Exception as chunk_error:
+                        print(f"Error processing chunk #{chunk_count}: {chunk_error}")
+                        continue
+                
+                print(f"\nFinished PR creation. Total chunks: {chunk_count}")
+                
+                if pr_url and pr_number:
                     pr_data = PullRequestData(
                         title=f"[{state.current_ticket.key}] {state.current_ticket.summary}",
                         body=pr_body,
                         head_branch=branch_name,
                         base_branch="main",
-                        repository=repo_name,
+                        repository=repo_full_name,
                         labels=["automated", "jira-ticket"],
                         draft=False,
-                        url=result.get("html_url"),
-                        number=result.get("number")
+                        url=pr_url,
+                        number=pr_number
                     )
                     created_prs.append(pr_data)
+                    print(f"✓ Created PR #{pr_number} for {repo_full_name}")
+                else:
+                    print(f"Warning: Could not extract PR URL/number for {repo_full_name}")
                     
             except Exception as e:
-                print(f"Error creating PR for {repo_name}: {e}")
+                print(f"Error creating PR for {repo_full_name}: {e}")
+                import traceback
+                print(traceback.format_exc())
                 continue
         
         if not created_prs:
@@ -760,11 +1071,13 @@ def _parse_jira_issue(issue: Dict, jira_url: str) -> TicketData:
     )
 
 
-def _generate_pr_body(ticket: TicketData, changes: List) -> str:
-    """Generate PR body from ticket information and changes."""
-    changes_summary = "\n".join([
-        f"- {getattr(change, 'description', 'Code change')}" for change in changes
-    ])
+def _generate_pr_body(ticket: TicketData, changes_description: str) -> str:
+    """Generate PR body from ticket information and changes description."""
+    # If changes_description is provided, use it; otherwise use ticket description
+    if changes_description:
+        changes_summary = f"## Changes Made\n{changes_description}"
+    else:
+        changes_summary = f"Implemented changes for ticket {ticket.key}: {ticket.description}"
     
     test_plan = "- [ ] Verify all tests pass\n- [ ] Manual testing completed\n- [ ] Code review completed"
     

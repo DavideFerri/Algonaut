@@ -43,8 +43,6 @@ class RepositoryInfo(BaseModel):
     name: str
     full_name: str
     url: str
-    clone_url: str
-    ssh_url: str
     default_branch: str = "main"
     primary_language: Optional[ProgrammingLanguage] = None
     languages: Dict[str, int] = {}

@@ -33,7 +33,7 @@ async def tickets_or_end(state: JiraToPRState) -> Literal["select_ticket", END]:
         return END
 
 
-async def analyze_or_error(state: JiraToPRState) -> Literal["analyze_repositories", "cleanup_state"]:
+async def analyze_or_error(state: JiraToPRState) -> Literal["analyze_repositories", END]:
     """
     Route between repository analysis or cleanup based on ticket selection.
     
@@ -42,12 +42,12 @@ async def analyze_or_error(state: JiraToPRState) -> Literal["analyze_repositorie
         
     Returns:
         - "analyze_repositories": When a ticket was successfully selected
-        - "cleanup_state": When no ticket was selected or error occurred
+        - END
     """
     if state.current_ticket is not None and state.error is None:
         return "analyze_repositories"
     else:
-        return "cleanup_state"
+        return END
 
 
 async def generate_or_error(state: JiraToPRState) -> Literal["generate_code", "cleanup_state"]:

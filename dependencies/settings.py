@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     # Extended Storage Configuration
     cache_ttl_hours: int = Field(default=24, env="CACHE_TTL_HOURS")
     cleanup_on_exit: bool = Field(default=True, env="CLEANUP_ON_EXIT")
+
+    path_to_local_repos: str = Field(env="PATH_TO_LOCAL_REPOS")
     
     class Config:
         env_file = ".env"
