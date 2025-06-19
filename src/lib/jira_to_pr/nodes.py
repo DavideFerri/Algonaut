@@ -14,9 +14,10 @@ from lib.jira_to_pr.models import (
     JiraToPRState, TicketData, RepositoryInfo, CodeGenerationRequest,
     CodeGenerationResult, PullRequestData, WorkflowResult, CodeChange
 )
+import claude_code_sdk
 # Claude SDK with MCP integration
 try:
-    from claude_code_sdk import query, ClaudeCodeOptions
+    from claude_code_sdk import query, ClaudeCodeOptions, CLIJSONDecodeError
     from claude_code_sdk.types import McpServerConfig
     CLAUDE_SDK_AVAILABLE = True
 except ImportError:
@@ -95,30 +96,30 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
         tickets = []
         response_text = ""
         chunk_count = 0
-        
+
         print("Starting to process Jira MCP response...")
-        
-        try:
-            async for chunk in result_generator:
+
+        async for chunk in result_generator:
+            try:
                 chunk_count += 1
                 print(f"\n{'='*80}")
                 print(f"Jira chunk #{chunk_count}: {type(chunk).__name__}")
                 print(f"{'='*80}")
-                
+
                 # Print full chunk content for debugging
                 print(f"Full chunk content:\n{chunk}")
-                
+
                 response_text += str(chunk)
-                
+
                 # Look for JSON data in the response
                 if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
                     if hasattr(chunk, 'result'):
                         result_content = chunk.result
-                    
+
                     # Try to parse JSON from the result
                     import re
                     import json
-                    
+
                     # Look for JSON blocks in code blocks or plain text
                     json_patterns = [
                         r'```json\s*(\{.*?\})\s*```',  # JSON in code blocks
@@ -126,18 +127,18 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
                         r'(\{.*?"issues".*?\})',       # JSON with issues array
                         r'(\{.*?\})'                   # Any JSON object
                     ]
-                    
+
                     json_matches = []
                     for pattern in json_patterns:
                         matches = re.findall(pattern, result_content, re.DOTALL)
                         json_matches.extend(matches)
                         if matches:
                             break  # Use first successful pattern
-                    
+
                     for json_match in json_matches:
                         try:
                             data = json.loads(json_match)
-                            
+
                             # Handle nested structure with "issues" array
                             if isinstance(data, dict) and 'issues' in data:
                                 issues = data['issues']
@@ -145,7 +146,7 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
                                 issues = data
                             else:
                                 issues = [data]
-                            
+
                             for issue in issues:
                                 if isinstance(issue, dict) and 'key' in issue:
                                     # Create TicketData object with proper validation
@@ -153,11 +154,11 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
                                     raw_status = issue.get('status', {}).get('name', 'To Do') if isinstance(issue.get('status'), dict) else str(issue.get('status', 'To Do'))
                                     if raw_status not in ['To Do', 'In Progress', 'In Review', 'Done']:
                                         raw_status = 'To Do'  # Default to valid status
-                                    
+
                                     # Generate URL for the ticket
                                     ticket_key = issue.get('key', '')
                                     ticket_url = f"{settings.jira_url}/browse/{ticket_key}" if ticket_key else ""
-                                    
+
                                     ticket = TicketData(
                                         id=str(issue.get('id', '')),
                                         key=ticket_key,
@@ -177,15 +178,17 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
                                         url=ticket_url
                                     )
                                     tickets.append(ticket)
-                        
+
                         except json.JSONDecodeError:
                             continue
-        
-        except Exception as async_error:
-            print(f"Error processing Jira async generator: {async_error}")
-            import traceback
-            print(traceback.format_exc())
-        
+            except CLIJSONDecodeError as e:
+                print(f"  <UNK> Error parsing result summary: {e}")
+                continue
+            except Exception as async_error:
+                print(f"Error processing Jira async generator: {async_error}")
+                import traceback
+                print(traceback.format_exc())
+
         print(f"Finished processing Jira MCP response. Found {len(tickets)} tickets.")
         print(tickets)
         
@@ -326,7 +329,7 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
         """
         
         print(f"Creating GitHub MCP query with config: {github_server_config}")
-        
+
         try:
             github_result_generator = query(
                 prompt=search_repos_prompt,
@@ -340,23 +343,22 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
         except Exception as e:
             print(f"Error creating GitHub query: {e}")
             raise
-        
+
         # Collect GitHub response
         github_response_text = ""
         github_tool_result_data = None
-        
+
         print("Starting to process GitHub async generator...")
-        
+
         chunk_count = 0
         try:
             async for chunk in github_result_generator:
-                chunk_count += 1
-                print(f"\nGitHub chunk #{chunk_count}: {type(chunk).__name__}")
-                
                 try:
+                    chunk_count += 1
+                    print(f"\nGitHub chunk #{chunk_count}: {type(chunk).__name__}")
                     # Print chunk content for debugging
                     print(f"Chunk content: {chunk}")
-                    
+
                     # Check if this is a UserMessage with tool results
                     if hasattr(chunk, 'content') and isinstance(chunk.content, list):
                         print(f"Chunk has content list with {len(chunk.content)} items")
@@ -371,89 +373,94 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
                                             github_tool_result_data = item.get('text', '')
                                             print(f"Found GitHub tool result data!")
                                             break
-                    
+
                     github_response_text += str(chunk)
                     print(f"Successfully processed chunk #{chunk_count}")
+                except CLIJSONDecodeError as e:
+                    print(f"  <UNK> Error parsing result summary: {e}")
+                    continue
                 except Exception as chunk_error:
                     print(f"Error processing chunk #{chunk_count}: {chunk_error}")
                     continue
-            
+
             print("Finished processing GitHub async generator")
         except Exception as e:
             print(f"Error in GitHub async generator processing: {e}")
             print(f"Error type: {type(e).__name__}")
             print(f"Error args: {e.args}")
             print(f"Processed {chunk_count} chunks before error")
-            
+
             # Try to get more details about the TaskGroup error
             import traceback
             print("Full traceback:")
             print(traceback.format_exc())
-            
+
             # Re-raise to stop execution and understand the root cause
             raise
-        
+
         # Parse the final ResultMessage to get selected repositories
         selected_repos = []
-        
-        # Extract JSON from the response text that contains ResultMessage
-        if github_response_text and 'ResultMessage' in github_response_text:
+
+        # Look for ResultMessage in chunks
+        print("Looking for repository data in response...")
+
+        # First try to extract from the accumulated response text
+        if github_response_text:
             import re
             import json
-            
-            # Look for the result attribute content - handle escaped quotes
-            result_match = re.search(r"result='(.*?)'(?:,|\))", github_response_text, re.DOTALL)
+
+            # Look for ResultMessage result field directly
+            result_match = re.search(r"result='(\[.*?\])'", github_response_text, re.DOTALL)
+            if not result_match:
+                # Try alternative format
+                result_match = re.search(r'result="(\[.*?\])"', github_response_text, re.DOTALL)
+
             if result_match:
                 result_content = result_match.group(1)
-                
-                # Replace escaped quotes
+
+                # Replace escaped characters
                 result_content = result_content.replace("\\'", "'")
-                
-                # Find the JSON array in the result content
-                json_match = re.search(r'\[\s*\{[^}]+\}\s*\]', result_content)
-                if json_match:
-                    json_str = json_match.group(0)
-                    try:
-                        # Parse the JSON - handle escaped newlines
-                        print(f"Found JSON: {json_str}")
-                        # Replace escaped newlines with actual newlines for proper JSON parsing
-                        json_str_clean = json_str.replace('\\n', '\n')
-                        result_data = json.loads(json_str_clean)
-                        
-                        # Create RepositoryInfo objects
-                        for repo_data in result_data:
-                            repo_name = repo_data.get("name", "")
-                            repo_full_name = repo_data.get("full_name", "")
-                            repo_url = repo_data.get("url", "")
-                            
-                            # Parse relevance score as float
-                            relevance_score_str = repo_data.get("relevance_score", "0.0")
-                            try:
-                                relevance_score = float(relevance_score_str)
-                            except ValueError:
-                                relevance_score = 0.0
-                            
-                            repo_info = RepositoryInfo(
-                                name=repo_name,
-                                full_name=repo_full_name,
-                                url=repo_url,
-                                clone_url=repo_url + ".git" if repo_url else "",
-                                ssh_url=f"git@github.com:{repo_full_name}.git" if repo_full_name else "",
-                                default_branch=repo_data.get("default_branch", "main"),
-                                path_to_local_repo=repo_data.get("path_to_local_repo", None),
-                                primary_language=repo_data.get("language", None),
-                                languages={},
-                                relevance_score=relevance_score,
-                                relevance_reasoning=repo_data.get("reasoning", ""),
-                                analysis_notes=repo_data.get("reasoning", "")
-                            )
-                            selected_repos.append(repo_info)
-                            
-                    except json.JSONDecodeError as e:
-                        print(f"Error parsing JSON from ResultMessage: {e}")
-                        print(f"JSON string was: {json_str}")
-                        print(f"Clean JSON string was: {json_str_clean}")
-        
+                result_content = result_content.replace('\\"', '"')
+                result_content = result_content.replace('\\n', '\n')
+
+                try:
+                    # Parse the JSON directly
+                    result_data = json.loads(result_content)
+                    print(f"Successfully parsed JSON array with {len(result_data)} repositories")
+
+                    # Create RepositoryInfo objects
+                    for repo_data in result_data:
+                        repo_name = repo_data.get("name", "")
+                        repo_full_name = repo_data.get("full_name", "")
+                        repo_url = repo_data.get("url", "")
+
+                        # Parse relevance score as float
+                        relevance_score_str = repo_data.get("relevance_score", "0.0")
+                        try:
+                            relevance_score = float(relevance_score_str)
+                        except ValueError:
+                            relevance_score = 0.0
+
+                        repo_info = RepositoryInfo(
+                            name=repo_name,
+                            full_name=repo_full_name,
+                            url=repo_url,
+                            clone_url=repo_url + ".git" if repo_url else "",
+                            ssh_url=f"git@github.com:{repo_full_name}.git" if repo_full_name else "",
+                            default_branch=repo_data.get("default_branch", "main"),
+                            path_to_local_repo=repo_data.get("path_to_local_repo", None),
+                            primary_language=repo_data.get("language", None),
+                            languages={},
+                            relevance_score=relevance_score,
+                            relevance_reasoning=repo_data.get("reasoning", ""),
+                            analysis_notes=repo_data.get("reasoning", "")
+                        )
+                        selected_repos.append(repo_info)
+
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing JSON from ResultMessage: {e}")
+                    print(f"JSON string was: {result_content[:200]}...")
+
         print("The selected repositories are:")
         print(selected_repos)
         return {
@@ -515,7 +522,7 @@ async def generate_code(state: JiraToPRState) -> Dict:
         
         all_changes = []
         branches_created = []
-        
+
         for repo in state.selected_repositories:
             print(f"\n{'='*60}")
             print(f"Processing repository: {repo.full_name}")
@@ -584,7 +591,7 @@ async def generate_code(state: JiraToPRState) -> Dict:
             """
             
             print(f"Creating branch and generating code for {repo.full_name}")
-            
+
             try:
                 # Query using Claude SDK with GitHub MCP
                 result_generator = query(
@@ -622,15 +629,14 @@ async def generate_code(state: JiraToPRState) -> Dict:
                 print(f"Starting to process code generation for {repo.full_name}...")
                 
                 async for chunk in result_generator:
-                    chunk_count += 1
-                    print(f"\n{'='*80}")
-                    print(f"Chunk #{chunk_count}: {type(chunk).__name__}")
-                    print(f"{'='*80}")
-                    
-                    # Print full chunk content for debugging
-                    print(f"Full chunk content:\n{chunk}")
-                    
                     try:
+                        chunk_count += 1
+                        print(f"\n{'='*80}")
+                        print(f"Chunk #{chunk_count}: {type(chunk).__name__}")
+                        print(f"{'='*80}")
+
+                        # Print full chunk content for debugging
+                        print(f"Full chunk content:\n{chunk}")
                         # Check for tool usage
                         if hasattr(chunk, 'content') and isinstance(chunk.content, list):
                             print(f"  Chunk has content list with {len(chunk.content)} items")
@@ -710,6 +716,9 @@ async def generate_code(state: JiraToPRState) -> Dict:
                                     print(f"  ⚠️ No JSON summary found in result")
                         
                         print(f"✓ Successfully processed chunk #{chunk_count}")
+                    except CLIJSONDecodeError as e:
+                        print(f"  <UNK> Error parsing result summary: {e}")
+                        continue
                     except Exception as chunk_error:
                         print(f"⚠️ Error processing chunk #{chunk_count}: {chunk_error}")
                         import traceback
@@ -915,15 +924,14 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                 print(f"Processing PR creation for {repo_full_name}...")
                 
                 async for chunk in result_generator:
-                    chunk_count += 1
-                    print(f"\n{'='*80}")
-                    print(f"PR chunk #{chunk_count}: {type(chunk).__name__}")
-                    print(f"{'='*80}")
-                    
-                    # Print full chunk content for debugging
-                    print(f"Full chunk content:\n{chunk}")
-                    
                     try:
+                        chunk_count += 1
+                        print(f"\n{'='*80}")
+                        print(f"PR chunk #{chunk_count}: {type(chunk).__name__}")
+                        print(f"{'='*80}")
+
+                        # Print full chunk content for debugging
+                        print(f"Full chunk content:\n{chunk}")
                         # Check for tool usage
                         if hasattr(chunk, 'content') and isinstance(chunk.content, list):
                             for content_item in chunk.content:
@@ -971,6 +979,9 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                                         print(f"Error parsing PR result: {e}")
                         
                         print(f"Successfully processed chunk #{chunk_count}")
+                    except CLIJSONDecodeError as e:
+                        print(f"  <UNK> Error parsing result summary: {e}")
+                        continue
                     except Exception as chunk_error:
                         print(f"Error processing chunk #{chunk_count}: {chunk_error}")
                         continue
@@ -993,7 +1004,6 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                     print(f"✓ Created PR #{pr_number} for {repo_full_name}")
                 else:
                     print(f"Warning: Could not extract PR URL/number for {repo_full_name}")
-                    
             except Exception as e:
                 print(f"Error creating PR for {repo_full_name}: {e}")
                 import traceback
