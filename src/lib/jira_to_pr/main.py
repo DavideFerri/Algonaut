@@ -38,7 +38,12 @@ async def run_jira_to_pr_automation(
         logger.error("Configuration validation failed:")
         for error in config_errors:
             logger.error(f"  - {error}")
-        return {"success": False, "errors": config_errors}
+        return {
+            "success": False, 
+            "errors": config_errors,
+            "tickets_processed": 0,
+            "prs_created": 0
+        }
     
     # Create initial state
     initial_state = create_initial_state(
@@ -97,13 +102,58 @@ async def run_single_ticket(ticket_key: str, dry_run: bool = True) -> dict:
     """
     logger.info(f"Running automation for specific ticket: {ticket_key}")
     
-    # This would need to be implemented to handle single ticket processing
-    # For now, return a placeholder
-    return {
-        "success": False,
-        "error": "Single ticket processing not yet implemented",
-        "ticket_key": ticket_key
-    }
+    # Validate ticket format
+    if not ticket_key or not isinstance(ticket_key, str):
+        return {
+            "success": False,
+            "error": "Invalid ticket key provided",
+            "ticket_key": ticket_key
+        }
+    
+    # Validate configuration
+    config_errors = validate_jira_to_pr_config()
+    if config_errors:
+        logger.error("Configuration validation failed:")
+        for error in config_errors:
+            logger.error(f"  - {error}")
+        return {
+            "success": False,
+            "errors": config_errors,
+            "ticket_key": ticket_key
+        }
+    
+    # Create initial state with specific ticket
+    initial_state = create_initial_state(
+        max_tickets_per_run=1,
+        require_human_review=False,
+        dry_run=dry_run,
+        specific_ticket=ticket_key
+    )
+    
+    # Build and compile the workflow graph
+    graph = build_jira_to_pr_graph()
+    
+    try:
+        # Run the workflow
+        result = await graph.ainvoke(initial_state)
+        
+        return {
+            "success": result.get("error") is None,
+            "error": result.get("error"),
+            "ticket_key": ticket_key,
+            "tickets_processed": result.get("tickets_processed", 0),
+            "prs_created": result.get("prs_created", 0)
+        }
+        
+    except Exception as e:
+        logger.error(f"Single ticket processing failed: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "ticket_key": ticket_key,
+            "tickets_processed": 0,
+            "prs_created": 0
+        }
 
 
 def setup_environment():
@@ -179,3 +229,158 @@ async def main():
 if __name__ == "__main__":
     exit_code = asyncio.run(main())
     exit(exit_code)
+
+
+# Unit tests for the main module
+import unittest
+from unittest.mock import patch, MagicMock, AsyncMock
+import sys
+import os
+
+# Add the src directory to the Python path for tests
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+
+
+class TestJiraToPRMain(unittest.TestCase):
+    """Unit tests for the Jira to PR automation main module."""
+    
+    @patch('lib.jira_to_pr.main.validate_jira_to_pr_config')
+    @patch('lib.jira_to_pr.main.create_initial_state')
+    @patch('lib.jira_to_pr.main.build_jira_to_pr_graph')
+    def test_run_automation_config_validation_failure(self, mock_build, mock_create_state, mock_validate):
+        """Test that automation fails gracefully when config validation fails."""
+        # Setup
+        mock_validate.return_value = ["Missing JIRA_URL", "Missing GITHUB_TOKEN"]
+        
+        # Execute
+        result = asyncio.run(run_jira_to_pr_automation())
+        
+        # Assert
+        self.assertFalse(result["success"])
+        self.assertEqual(result["errors"], ["Missing JIRA_URL", "Missing GITHUB_TOKEN"])
+        self.assertEqual(result["tickets_processed"], 0)
+        self.assertEqual(result["prs_created"], 0)
+        mock_build.assert_not_called()
+        mock_create_state.assert_not_called()
+    
+    @patch('lib.jira_to_pr.main.validate_jira_to_pr_config')
+    @patch('lib.jira_to_pr.main.create_initial_state')
+    @patch('lib.jira_to_pr.main.build_jira_to_pr_graph')
+    def test_run_automation_success(self, mock_build, mock_create_state, mock_validate):
+        """Test successful automation run."""
+        # Setup
+        mock_validate.return_value = []
+        mock_state = {"initial": "state"}
+        mock_create_state.return_value = mock_state
+        
+        mock_graph = AsyncMock()
+        mock_graph.ainvoke.return_value = {
+            "tickets_processed": 3,
+            "prs_created": 2,
+            "workflow_result": "success",
+            "workflow_stage": "completed",
+            "error": None
+        }
+        mock_build.return_value = mock_graph
+        
+        # Execute
+        result = asyncio.run(run_jira_to_pr_automation(max_tickets=10))
+        
+        # Assert
+        self.assertTrue(result["success"])
+        self.assertEqual(result["tickets_processed"], 3)
+        self.assertEqual(result["prs_created"], 2)
+        self.assertIsNone(result["error"])
+        mock_create_state.assert_called_once_with(
+            max_tickets_per_run=10,
+            require_human_review=True,
+            dry_run=False
+        )
+    
+    @patch('lib.jira_to_pr.main.validate_jira_to_pr_config')
+    @patch('lib.jira_to_pr.main.create_initial_state')
+    @patch('lib.jira_to_pr.main.build_jira_to_pr_graph')
+    def test_run_automation_workflow_error(self, mock_build, mock_create_state, mock_validate):
+        """Test automation handles workflow errors properly."""
+        # Setup
+        mock_validate.return_value = []
+        mock_create_state.return_value = {"initial": "state"}
+        
+        mock_graph = AsyncMock()
+        mock_graph.ainvoke.return_value = {
+            "tickets_processed": 1,
+            "prs_created": 0,
+            "error": "Failed to connect to Jira"
+        }
+        mock_build.return_value = mock_graph
+        
+        # Execute
+        result = asyncio.run(run_jira_to_pr_automation())
+        
+        # Assert
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "Failed to connect to Jira")
+    
+    @patch('lib.jira_to_pr.main.validate_jira_to_pr_config')
+    def test_run_single_ticket_invalid_key(self, mock_validate):
+        """Test single ticket processing with invalid ticket key."""
+        # Test empty string
+        result = asyncio.run(run_single_ticket(""))
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "Invalid ticket key provided")
+        
+        # Test None
+        result = asyncio.run(run_single_ticket(None))
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "Invalid ticket key provided")
+    
+    @patch('lib.jira_to_pr.main.validate_jira_to_pr_config')
+    @patch('lib.jira_to_pr.main.create_initial_state')
+    @patch('lib.jira_to_pr.main.build_jira_to_pr_graph')
+    def test_run_single_ticket_success(self, mock_build, mock_create_state, mock_validate):
+        """Test successful single ticket processing."""
+        # Setup
+        mock_validate.return_value = []
+        mock_state = {"initial": "state", "specific_ticket": "JIRA-123"}
+        mock_create_state.return_value = mock_state
+        
+        mock_graph = AsyncMock()
+        mock_graph.ainvoke.return_value = {
+            "tickets_processed": 1,
+            "prs_created": 1,
+            "error": None
+        }
+        mock_build.return_value = mock_graph
+        
+        # Execute
+        result = asyncio.run(run_single_ticket("JIRA-123", dry_run=False))
+        
+        # Assert
+        self.assertTrue(result["success"])
+        self.assertEqual(result["ticket_key"], "JIRA-123")
+        self.assertEqual(result["tickets_processed"], 1)
+        self.assertEqual(result["prs_created"], 1)
+        mock_create_state.assert_called_once_with(
+            max_tickets_per_run=1,
+            require_human_review=False,
+            dry_run=False,
+            specific_ticket="JIRA-123"
+        )
+    
+    @patch('lib.jira_to_pr.main.validate_jira_to_pr_config')
+    @patch('lib.jira_to_pr.main.create_sample_env_file')
+    def test_setup_environment_with_errors(self, mock_create_sample, mock_validate):
+        """Test environment setup with configuration errors."""
+        # Setup
+        mock_validate.return_value = ["Missing API key"]
+        
+        # Execute
+        success = setup_environment()
+        
+        # Assert
+        self.assertFalse(success)
+        mock_create_sample.assert_called_once()
+
+
+if __name__ == '__main__':
+    unittest.main()
