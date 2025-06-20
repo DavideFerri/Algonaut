@@ -16,8 +16,6 @@ from lib.jira_to_pr.models import (
 )
 import claude_code_sdk
 
-from lib.jira_to_pr.code_generation_utils import create_branch, analyze_repository, modify_file
-
 # Claude SDK with MCP integration
 try:
     from claude_code_sdk import query, ClaudeCodeOptions, CLIJSONDecodeError
@@ -548,53 +546,6 @@ async def generate_code(state: JiraToPRState) -> Dict:
             - workflow_stage: Updated to "code_generated"
             - messages: Generation results
     """
-
-    async def process_repository(repo, ticket, github_server_config):
-        """Process a single repository: create branch, analyze, and modify files."""
-        print(f"\n{'='*60}")
-        print(f"Processing repository: {repo.full_name}")
-        print(f"{'='*60}")
-
-        # Create feature branch name
-        branch_name = f"{DEFAULT_BRANCH_PREFIX}{ticket.key.lower()}"
-
-        # Step 1: Create branch
-        branch_created = await create_branch(repo, branch_name, github_server_config)
-        if not branch_created:
-            print(f"⚠️ Failed to create branch for {repo.full_name}, skipping...")
-            return None
-
-        # Step 2: Analyze repository
-        files_to_modify = await analyze_repository(repo, ticket, github_server_config)
-
-        # Step 3: Modify files one at a time
-        files_modified = []
-        for i, file_info in enumerate(files_to_modify[:5]):  # Limit to 5 files max
-            print(f"\nStep 3.{i+1}: Processing file {i+1}/{min(len(files_to_modify), 5)}")
-            modified_file = await modify_file(file_info, repo, branch_name, ticket, github_server_config)
-            if modified_file:
-                files_modified.append(modified_file)
-
-        # Return results for this repository
-        if branch_created:
-            files_description = "\n".join([
-                f"- {f['path']}: {f['description']}"
-                for f in files_modified
-            ])
-
-            print(f"\n✓ Completed {repo.full_name}: {len(files_modified)} files modified on branch {branch_name}")
-
-            return {
-                "repository": repo.full_name,
-                "branch": branch_name,
-                "changes_description": files_description,
-                "files_count": len(files_modified),
-                "files_modified": files_modified
-            }
-
-        return None
-
-    # Main function body
     try:
         if not state.current_ticket or not state.selected_repositories:
             return {
@@ -617,36 +568,303 @@ async def generate_code(state: JiraToPRState) -> Dict:
             }
         )
 
-        # Process each repository
+        all_changes = []
         branches_created = []
+
         for repo in state.selected_repositories:
-            result = await process_repository(repo, state.current_ticket, github_server_config)
-            if result:
-                branches_created.append(result)
+            print(f"\n{'='*60}")
+            print(f"Processing repository: {repo.full_name}")
+            print(f"{'='*60}")
+
+            # Parse owner and repo name from full_name
+            owner, repo_name = repo.full_name.split('/')
+
+            # Create feature branch name
+            branch_name = f"{DEFAULT_BRANCH_PREFIX}{state.current_ticket.key.lower()}"
+
+            # Generate code using Claude SDK with GitHub MCP
+            code_generation_prompt = f"""
+            You are an expert software engineer tasked with implementing the following Jira ticket:
+
+            Ticket: {state.current_ticket.key} - {state.current_ticket.summary}
+            Description: {state.current_ticket.description}
+
+            Repository: {repo.full_name}
+            Primary Language: {repo.primary_language}
+
+            Your task:
+            1. First, get the default branch SHA to create a new branch from:
+               - Use get_file_contents with owner: {owner}, repo: {repo_name}, path: "" (empty string for root)
+               - Extract the SHA from the response
+
+            2. Create a new branch named "{branch_name}" using create_branch:
+               - owner: {owner}
+               - repo: {repo_name}
+               - branch: {branch_name}
+               - sha: (use the SHA from step 1)
+
+            3. Explore the repository structure using get_file_contents:
+               - Look for README files to understand the project
+               - Identify files that need to be modified for: "{state.current_ticket.description}"
+
+            4. For each file that needs to be modified:
+               - Use get_file_contents to read the current content
+               - Generate the improved/modified content
+               - Use create_or_update_file to commit the changes:
+                 - owner: {owner}
+                 - repo: {repo_name}
+                 - path: (file path)
+                 - message: "[{state.current_ticket.key}] Update (file name)"
+                 - content: (new content)
+                 - branch: {branch_name}
+               - If there are a lot of changes to be made, please put them in batches and call create_or_update_file on 
+               the same file multiple times.
+
+            Important:
+            - Only modify files that are directly relevant to the ticket
+            - Follow existing code style and patterns
+            - Make sure all changes are committed to the branch {branch_name}
+
+            At the end, return a summary of what was done as JSON:
+            {{
+                "branch_created": "{branch_name}",
+                "files_modified": [
+                    {{
+                        "path": "file/path",
+                        "description": "what was changed"
+                    }}
+                ],
+                "success": true
+            }}
+            """
+
+            print(f"Creating branch and generating code for {repo.full_name}")
+
+            try:
+                # Process the async generator to collect the response
+                response_text = ""
+                result_summary = None
+                chunk_count = 0
+                branch_created = False
+                files_modified = []
+
+                print(f"Starting to process code generation for {repo.full_name}...")
+                max_attempts = 10
+                for attempt in range(max_attempts):
+                    # Query using Claude SDK with GitHub MCP
+                    result_generator = query(
+                        prompt=code_generation_prompt,
+                        options=ClaudeCodeOptions(
+                            mcp_servers={"github": github_server_config},
+                            mcp_tools=[
+                                "mcp__github__get_file_contents",
+                                "mcp__github__create_branch",
+                                "mcp__github__create_or_update_file",
+                                "mcp__github__push_files",
+                                "mcp__github__get_commit",
+                                "mcp__github__list_branches",
+                                "mcp__github__search_code"
+                            ],
+                            allowed_tools=[
+                                "mcp__github__get_file_contents",
+                                "mcp__github__create_branch",
+                                "mcp__github__create_or_update_file",
+                                "mcp__github__push_files",
+                                "mcp__github__get_commit",
+                                "mcp__github__list_branches",
+                                "mcp__github__search_code"
+                            ]
+                        )
+                    )
+                    try:
+                        async for chunk in result_generator:
+                            try:
+                                chunk_count += 1
+                                print(f"\n{'='*80}")
+                                print(f"Chunk #{chunk_count}: {type(chunk).__name__}")
+                                print(f"{'='*80}")
+
+                                # Print full chunk content for debugging
+                                print(f"Full chunk content:\n{chunk}")
+                                # Check for tool usage
+                                if hasattr(chunk, 'content') and isinstance(chunk.content, list):
+                                    print(f"  Chunk has content list with {len(chunk.content)} items")
+                                    for i, content_item in enumerate(chunk.content):
+                                        print(f"\n  Content item #{i}:")
+                                        print(f"    Type: {type(content_item)}")
+                                        if isinstance(content_item, dict):
+                                            print(f"    Dict keys: {list(content_item.keys())}")
+                                            print(f"    Content: {content_item}")
+
+                                            if content_item.get('type') == 'tool_use':
+                                                tool_name = content_item.get('name', '')
+                                                print(f"    ✓ Tool used: {tool_name}")
+                                                print(f"    Tool input: {content_item.get('input', {})}")
+                                                if 'create_branch' in tool_name:
+                                                    branch_created = True
+                                                    print(f"    ✓ Branch {branch_name} should be created")
+                                                elif 'create_or_update_file' in tool_name or 'push_files' in tool_name:
+                                                    print(f"    ✓ Files being updated")
+                                            elif content_item.get('type') == 'tool_result':
+                                                print(f"    ✓ Tool result received")
+                                                tool_content = content_item.get('content', [])
+                                                print(f"    Tool result content type: {type(tool_content)}")
+                                                if tool_content:
+                                                    print(f"    Tool result content: {tool_content}")
+                                                tool_name = content_item.get('tool_use_id', '')
+                                                print(f"    Tool use ID: {tool_name}")
+                                                is_error = content_item.get('is_error', False)
+                                                if is_error:
+                                                    print(f"    ⚠️ TOOL ERROR DETECTED")
+                                        else:
+                                            print(f"    Non-dict content: {content_item}")
+
+                                # Check if this is a message type
+                                if hasattr(chunk, 'role'):
+                                    print(f"  Message role: {chunk.role}")
+
+                                response_text += str(chunk)
+
+                                # Look for ResultMessage with summary
+                                if hasattr(chunk, '__class__') and chunk.__class__.__name__ == 'ResultMessage':
+                                    print(f"\n✓ Found ResultMessage in chunk #{chunk_count}")
+                                    if hasattr(chunk, 'result'):
+                                        result_content = chunk.result
+                                        print(f"  Result content: {result_content[:500]}...")  # First 500 chars
+
+                                        # Try to extract JSON summary
+                                        import re
+                                        import json
+
+                                        # Look for JSON block in the result
+                                        json_match = re.search(r'```json\s*(\{.*?\})\s*```', result_content, re.DOTALL)
+                                        if not json_match:
+                                            # Try without code block markers
+                                            json_match = re.search(r'\{.*?"branch_created".*?"success"\s*:\s*true.*?\}', result_content, re.DOTALL)
+
+                                        if json_match:
+                                            try:
+                                                json_str = json_match.group(1) if '```' in result_content else json_match.group(0)
+                                                # Clean up the JSON string
+                                                json_str = json_str.strip()
+                                                result_summary = json.loads(json_str)
+                                                print(f"  ✓ Successfully parsed result summary: {result_summary}")
+
+                                                # Mark branch as created if successful
+                                                if result_summary.get('success') and result_summary.get('branch_created'):
+                                                    branch_created = True
+                                                    print(f"  ✓ Branch {result_summary['branch_created']} was created successfully")
+
+                                                if result_summary.get('files_modified'):
+                                                    files_modified = result_summary['files_modified']
+                                                    print(f"  Files modified: {files_modified}")
+                                            except json.JSONDecodeError as e:
+                                                print(f"  ⚠️ Error parsing result summary: {e}")
+                                                print(f"  JSON string was: {json_str}")
+                                        else:
+                                            print(f"  ⚠️ No JSON summary found in result")
+
+                                print(f"✓ Successfully processed chunk #{chunk_count}")
+                            except CLIJSONDecodeError as e:
+                                print(f"  <UNK> Error parsing result summary: {e}")
+                                continue
+                            except Exception as chunk_error:
+                                print(f"⚠️ Error processing chunk #{chunk_count}: {chunk_error}")
+                                import traceback
+                                print(traceback.format_exc())
+                                continue
+                        break
+                    except ExceptionGroup as eg:
+                        print(f"Error in code generation - ExceptionGroup caught")
+                        print(f"ExceptionGroup message: {eg}")
+                        print(f"Number of exceptions in group: {len(eg.exceptions)}")
+                        for j, exc in enumerate(eg.exceptions):
+                            print(f"\nException {j+1}/{len(eg.exceptions)}:")
+                            print(f"  Type: {type(exc).__name__}")
+                            print(f"  Message: {exc}")
+                            import traceback
+                            print(f"  Traceback:")
+                            print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+                        continue
+
+                print(f"\nFinished processing. Total chunks: {chunk_count}")
+                print(f"Debug - branch_created: {branch_created}")
+                print(f"Debug - result_summary: {result_summary}")
+                if result_summary:
+                    print(f"Debug - result_summary.get('success'): {result_summary.get('success')}")
+
+                # Record the branch that was created
+                if branch_created or (result_summary and result_summary.get('success')):
+                    # Get the actual branch name from the result if available
+                    actual_branch_name = branch_name
+                    if result_summary and result_summary.get('branch_created'):
+                        actual_branch_name = result_summary['branch_created']
+
+                    # Extract files modified information for PR description
+                    files_description = ""
+                    if result_summary and result_summary.get('files_modified'):
+                        file_descriptions = []
+                        for file_info in result_summary['files_modified']:
+                            file_path = file_info.get('path', '')
+                            description = file_info.get('description', '')
+                            if file_path and description:
+                                file_descriptions.append(f"- {file_path}: {description}")
+                        if file_descriptions:
+                            files_description = "\n".join(file_descriptions)
+
+                    branches_created.append({
+                        "repository": repo.full_name,
+                        "branch": actual_branch_name,
+                        "changes_description": files_description
+                    })
+                    print(f"✓ Recorded branch creation: {repo.full_name} -> {actual_branch_name}")
+
+            except Exception as e:
+                print(f"Error processing repository {repo.name}: {e}")
+                import traceback
+                print(traceback.format_exc())
+                continue
 
         if not branches_created:
+            import traceback
+            print(f"Error: No branches were created")
+            print(traceback.format_exc())
             return {
                 "error": "No branches were created",
                 "workflow_stage": "error",
                 "messages": [AIMessage(content="Failed to create branches (will retry)")]
             }
 
-        # Create CodeChange objects from the results
+        # Parse file changes from branches and create CodeChange objects
         code_changes = []
         total_files_modified = 0
 
         for branch_info in branches_created:
-            for file_info in branch_info.get('files_modified', []):
-                code_change = CodeChange(
-                    file_path=file_info['path'],
-                    operation='modify',
-                    description=file_info['description'],
-                    complexity_score=1
-                )
-                code_changes.append(code_change)
-                total_files_modified += 1
+            branch_files = []
+            if branch_info.get('changes_description'):
+                # Parse each file from the description
+                for line in branch_info['changes_description'].split('\n'):
+                    if line.strip().startswith('- '):
+                        # Extract file path and description
+                        parts = line.strip()[2:].split(':', 1)
+                        if len(parts) == 2:
+                            file_path = parts[0].strip()
+                            description = parts[1].strip()
 
-        # Print summary
+                            # Create CodeChange object
+                            code_change = CodeChange(
+                                file_path=file_path,
+                                operation='modify',  # Fixed: use 'operation' field name
+                                description=description,
+                                complexity_score=1  # Default score
+                            )
+                            code_changes.append(code_change)
+                            branch_files.append(code_change)
+
+            # Store file count for this branch
+            branch_info['files_count'] = len(branch_files)
+            total_files_modified += len(branch_files)
+
         print(f"\n{'='*60}")
         print(f"Summary:")
         print(f"  Branches created: {len(branches_created)}")
