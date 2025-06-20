@@ -103,7 +103,7 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
         print("Starting to process Jira MCP response...")
 
         max_attempts = 3
-        for i in range(max_attempts):
+        for attempt in range(max_attempts):
             try:
                 async for chunk in result_generator:
                     try:
@@ -196,7 +196,7 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
                         print(traceback.format_exc())
                 break
             except ExceptionGroup as eg:
-                print(f"Error processing Jira MCP response - ExceptionGroup caught")
+                print(f"Error processing Jira MCP response - ExceptionGroup caught (attempt {attempt + 1}/{max_attempts})")
                 print(f"ExceptionGroup message: {eg}")
                 print(f"Number of exceptions in group: {len(eg.exceptions)}")
                 for i, exc in enumerate(eg.exceptions):
@@ -206,7 +206,14 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
                     import traceback
                     print(f"  Traceback:")
                     print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
-                continue
+                
+                # Retry on ExceptionGroup unless it's the last attempt
+                if attempt < max_attempts - 1:
+                    print(f"Retrying after ExceptionGroup... (attempt {attempt + 2}/{max_attempts})")
+                    await asyncio.sleep(1)  # Brief delay before retry
+                    continue
+                else:
+                    print("Max retry attempts reached for Jira fetch")
 
         print(f"Finished processing Jira MCP response. Found {len(tickets)} tickets.")
         print(tickets)
@@ -371,7 +378,7 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
 
         chunk_count = 0
         max_attempts = 3
-        for i in range(max_attempts):
+        for attempt in range(max_attempts):
             try:
                 async for chunk in github_result_generator:
                     try:
@@ -407,7 +414,7 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
                 print("Finished processing GitHub async generator")
                 break
             except ExceptionGroup as eg:
-                print(f"Error processing GitHub async generator - ExceptionGroup caught")
+                print(f"Error processing GitHub async generator - ExceptionGroup caught (attempt {attempt + 1}/{max_attempts})")
                 print(f"ExceptionGroup message: {eg}")
                 print(f"Number of exceptions in group: {len(eg.exceptions)}")
                 for i, exc in enumerate(eg.exceptions):
@@ -417,7 +424,14 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
                     import traceback
                     print(f"  Traceback:")
                     print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
-                continue
+                
+                # Retry on ExceptionGroup unless it's the last attempt
+                if attempt < max_attempts - 1:
+                    print(f"Retrying after ExceptionGroup... (attempt {attempt + 2}/{max_attempts})")
+                    await asyncio.sleep(1)  # Brief delay before retry
+                    continue
+                else:
+                    print("Max retry attempts reached for repository analysis")
             except Exception as e:
                 print(f"Error in GitHub async generator processing: {e}")
                 print(f"Error type: {type(e).__name__}")
@@ -627,7 +641,7 @@ async def generate_code(state: JiraToPRState) -> Dict:
         if not branches_created:
             return {
                 "error": "No branches were created",
-                "workflow_stage": "error",
+                "workflow_stage": "retry_generate_code",
                 "messages": [AIMessage(content="Failed to create branches (will retry)")]
             }
 
@@ -666,8 +680,8 @@ async def generate_code(state: JiraToPRState) -> Dict:
     except Exception as e:
         return {
             "error": str(e),
-            "workflow_stage": "error",
-            "messages": [AIMessage(content=f"Error generating code: {str(e)}")]
+            "workflow_stage": "retry_generate_code",
+            "messages": [AIMessage(content=f"Error generating code: {str(e)} (will retry)")]
         }
 
 
@@ -768,7 +782,7 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                 
                 print(f"Processing PR creation for {repo_full_name}...")
                 max_attempts = 3
-                for i in range(max_attempts):
+                for attempt in range(max_attempts):
                     try:
                         async for chunk in result_generator:
                             try:
@@ -796,11 +810,36 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                                                             result_text = item.get('text', '')
                                                             # Try to extract PR URL and number
                                                             import re
-                                                            url_match = re.search(r'https://github\.com/[^/]+/[^/]+/pull/(\d+)', result_text)
-                                                            if url_match:
-                                                                pr_url = url_match.group(0)
-                                                                pr_number = int(url_match.group(1))
-                                                                print(f"  Found PR: {pr_url}")
+                                                            # Try different patterns for PR URL extraction
+                                                            url_patterns = [
+                                                                r'"html_url":\s*"(https://github\.com/[^/]+/[^/]+/pull/\d+)"',
+                                                                r'https://github\.com/[^/]+/[^/]+/pull/(\d+)',
+                                                                r'"url":\s*"(https://api\.github\.com/repos/[^/]+/[^/]+/pulls/\d+)"'
+                                                            ]
+                                                            
+                                                            for pattern in url_patterns:
+                                                                url_match = re.search(pattern, result_text)
+                                                                if url_match:
+                                                                    if 'api.github.com' in pattern:
+                                                                        # Convert API URL to web URL
+                                                                        api_url = url_match.group(1)
+                                                                        pr_url = api_url.replace('api.github.com/repos', 'github.com').replace('/pulls/', '/pull/')
+                                                                        pr_number = int(pr_url.split('/')[-1])
+                                                                    elif url_match.group(0).startswith('https://github.com'):
+                                                                        pr_url = url_match.group(0)
+                                                                        pr_number = int(pr_url.split('/')[-1])
+                                                                    else:
+                                                                        pr_number = int(url_match.group(1))
+                                                                        pr_url = f"https://github.com/{repo_full_name}/pull/{pr_number}"
+                                                                    print(f"  Found PR: {pr_url}")
+                                                                    break
+                                                            
+                                                            # Also try to find PR number directly
+                                                            if not pr_number:
+                                                                number_match = re.search(r'"number":\s*(\d+)', result_text)
+                                                                if number_match:
+                                                                    pr_number = int(number_match.group(1))
+                                                                    pr_url = f"https://github.com/{repo_full_name}/pull/{pr_number}"
 
                                 response_text += str(chunk)
 
@@ -834,7 +873,7 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                                 continue
                         break
                     except ExceptionGroup as eg:
-                        print(f"Error in PR creation - ExceptionGroup caught")
+                        print(f"Error in PR creation - ExceptionGroup caught (attempt {attempt + 1}/{max_attempts})")
                         print(f"ExceptionGroup message: {eg}")
                         print(f"Number of exceptions in group: {len(eg.exceptions)}")
                         for k, exc in enumerate(eg.exceptions):
@@ -844,7 +883,14 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                             import traceback
                             print(f"  Traceback:")
                             print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
-                        continue
+                        
+                        # Retry on ExceptionGroup unless it's the last attempt
+                        if attempt < max_attempts - 1:
+                            print(f"Retrying after ExceptionGroup... (attempt {attempt + 2}/{max_attempts})")
+                            await asyncio.sleep(1)  # Brief delay before retry
+                            continue
+                        else:
+                            print("Max retry attempts reached for PR creation")
                 print(f"\nFinished PR creation. Total chunks: {chunk_count}")
                 
                 if pr_url and pr_number:
@@ -872,8 +918,8 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
         if not created_prs:
             return {
                 "error": "No pull requests were created",
-                "workflow_stage": "error",
-                "messages": [AIMessage(content="No pull requests were created")]
+                "workflow_stage": "retry_create_pull_requests",
+                "messages": [AIMessage(content="No pull requests were created (will retry)")]
             }
         
         # TODO: Update Jira ticket using Jira MCP
@@ -909,7 +955,7 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
         return {
             "error": str(e),
             "workflow_stage": "retry_create_pull_requests",
-            "messages": [AIMessage(content=f"Error creating pull requests: {str(e)}")]
+            "messages": [AIMessage(content=f"Error creating pull requests: {str(e)} (will retry)")]
         }
 
 
@@ -1065,10 +1111,33 @@ def _generate_pr_body(ticket: TicketData, changes_description: str) -> str:
     else:
         changes_summary = f"Implemented changes for ticket {ticket.key}: {ticket.description}"
     
-    test_plan = "- [ ] Verify all tests pass\n- [ ] Manual testing completed\n- [ ] Code review completed"
+    # Build dynamic test plan based on ticket info
+    test_plan_items = ["- [ ] Verify all tests pass", "- [ ] Manual testing completed", "- [ ] Code review completed"]
     
+    # Add acceptance criteria if available
     if getattr(ticket, 'acceptance_criteria', None):
-        test_plan += f"\n- [ ] Acceptance criteria met:\n  {ticket.acceptance_criteria}"
+        test_plan_items.append(f"- [ ] Acceptance criteria met:\n  {ticket.acceptance_criteria}")
+    
+    # Add specific test items based on ticket type and components
+    if hasattr(ticket, 'ticket_type'):
+        if ticket.ticket_type.lower() in ['bug', 'defect']:
+            test_plan_items.insert(0, "- [ ] Bug is reproducible before fix")
+            test_plan_items.insert(1, "- [ ] Bug is fixed after changes")
+        elif ticket.ticket_type.lower() in ['feature', 'story']:
+            test_plan_items.insert(0, "- [ ] Feature works as described")
+            test_plan_items.insert(1, "- [ ] Edge cases handled properly")
+    
+    # Add component-specific tests
+    if hasattr(ticket, 'components') and ticket.components:
+        for component in ticket.components:
+            if 'api' in component.lower():
+                test_plan_items.append("- [ ] API endpoints tested")
+            elif 'ui' in component.lower() or 'frontend' in component.lower():
+                test_plan_items.append("- [ ] UI changes tested in browser")
+            elif 'database' in component.lower() or 'db' in component.lower():
+                test_plan_items.append("- [ ] Database migrations tested")
+    
+    test_plan = "\n".join(test_plan_items)
     
     return DEFAULT_PR_TEMPLATE.format(
         summary=ticket.summary,
