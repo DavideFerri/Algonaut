@@ -193,7 +193,16 @@ async def fetch_jira_tickets(state: JiraToPRState) -> Dict:
                         print(traceback.format_exc())
                 break
             except ExceptionGroup as eg:
-                print(f"  <UNK> Error parsing result summary: {eg}")
+                print(f"Error processing Jira MCP response - ExceptionGroup caught")
+                print(f"ExceptionGroup message: {eg}")
+                print(f"Number of exceptions in group: {len(eg.exceptions)}")
+                for i, exc in enumerate(eg.exceptions):
+                    print(f"\nException {i+1}/{len(eg.exceptions)}:")
+                    print(f"  Type: {type(exc).__name__}")
+                    print(f"  Message: {exc}")
+                    import traceback
+                    print(f"  Traceback:")
+                    print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
                 continue
 
         print(f"Finished processing Jira MCP response. Found {len(tickets)} tickets.")
@@ -394,8 +403,17 @@ async def analyze_repositories(state: JiraToPRState) -> Dict:
 
                 print("Finished processing GitHub async generator")
                 break
-            except ExceptionGroup as e:
-                print(f"Error processing GitHub async generator: {e}")
+            except ExceptionGroup as eg:
+                print(f"Error processing GitHub async generator - ExceptionGroup caught")
+                print(f"ExceptionGroup message: {eg}")
+                print(f"Number of exceptions in group: {len(eg.exceptions)}")
+                for i, exc in enumerate(eg.exceptions):
+                    print(f"\nException {i+1}/{len(eg.exceptions)}:")
+                    print(f"  Type: {type(exc).__name__}")
+                    print(f"  Message: {exc}")
+                    import traceback
+                    print(f"  Traceback:")
+                    print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
                 continue
             except Exception as e:
                 print(f"Error in GitHub async generator processing: {e}")
@@ -622,32 +640,6 @@ async def generate_code(state: JiraToPRState) -> Dict:
             print(f"Creating branch and generating code for {repo.full_name}")
 
             try:
-                # Query using Claude SDK with GitHub MCP
-                result_generator = query(
-                    prompt=code_generation_prompt,
-                    options=ClaudeCodeOptions(
-                        mcp_servers={"github": github_server_config},
-                        mcp_tools=[
-                            "mcp__github__get_file_contents",
-                            "mcp__github__create_branch",
-                            "mcp__github__create_or_update_file",
-                            "mcp__github__push_files",
-                            "mcp__github__get_commit",
-                            "mcp__github__list_branches",
-                            "mcp__github__search_code"
-                        ],
-                        allowed_tools=[
-                            "mcp__github__get_file_contents",
-                            "mcp__github__create_branch", 
-                            "mcp__github__create_or_update_file",
-                            "mcp__github__push_files",
-                            "mcp__github__get_commit",
-                            "mcp__github__list_branches",
-                            "mcp__github__search_code"
-                        ]
-                    )
-                )
-                
                 # Process the async generator to collect the response
                 response_text = ""
                 result_summary = None
@@ -656,8 +648,33 @@ async def generate_code(state: JiraToPRState) -> Dict:
                 files_modified = []
                 
                 print(f"Starting to process code generation for {repo.full_name}...")
-                max_attempts = 3
+                max_attempts = 10
                 for attempt in range(max_attempts):
+                    # Query using Claude SDK with GitHub MCP
+                    result_generator = query(
+                        prompt=code_generation_prompt,
+                        options=ClaudeCodeOptions(
+                            mcp_servers={"github": github_server_config},
+                            mcp_tools=[
+                                "mcp__github__get_file_contents",
+                                "mcp__github__create_branch",
+                                "mcp__github__create_or_update_file",
+                                "mcp__github__push_files",
+                                "mcp__github__get_commit",
+                                "mcp__github__list_branches",
+                                "mcp__github__search_code"
+                            ],
+                            allowed_tools=[
+                                "mcp__github__get_file_contents",
+                                "mcp__github__create_branch",
+                                "mcp__github__create_or_update_file",
+                                "mcp__github__push_files",
+                                "mcp__github__get_commit",
+                                "mcp__github__list_branches",
+                                "mcp__github__search_code"
+                            ]
+                        )
+                    )
                     try:
                         async for chunk in result_generator:
                             try:
@@ -756,8 +773,17 @@ async def generate_code(state: JiraToPRState) -> Dict:
                                 print(traceback.format_exc())
                                 continue
                         break
-                    except ExceptionGroup as e:
-                        print(f"  <UNK> Error parsing result summary: {e}")
+                    except ExceptionGroup as eg:
+                        print(f"Error in code generation - ExceptionGroup caught")
+                        print(f"ExceptionGroup message: {eg}")
+                        print(f"Number of exceptions in group: {len(eg.exceptions)}")
+                        for j, exc in enumerate(eg.exceptions):
+                            print(f"\nException {j+1}/{len(eg.exceptions)}:")
+                            print(f"  Type: {type(exc).__name__}")
+                            print(f"  Message: {exc}")
+                            import traceback
+                            print(f"  Traceback:")
+                            print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
                         continue
 
                 print(f"\nFinished processing. Total chunks: {chunk_count}")
@@ -1024,8 +1050,17 @@ async def create_pull_requests(state: JiraToPRState) -> Dict:
                                 print(f"Error processing chunk #{chunk_count}: {chunk_error}")
                                 continue
                         break
-                    except ExceptionGroup as e:
-                        print(f"Error processing chunk #{chunk_count}: {e}")
+                    except ExceptionGroup as eg:
+                        print(f"Error in PR creation - ExceptionGroup caught")
+                        print(f"ExceptionGroup message: {eg}")
+                        print(f"Number of exceptions in group: {len(eg.exceptions)}")
+                        for k, exc in enumerate(eg.exceptions):
+                            print(f"\nException {k+1}/{len(eg.exceptions)}:")
+                            print(f"  Type: {type(exc).__name__}")
+                            print(f"  Message: {exc}")
+                            import traceback
+                            print(f"  Traceback:")
+                            print(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
                         continue
                 print(f"\nFinished PR creation. Total chunks: {chunk_count}")
                 
