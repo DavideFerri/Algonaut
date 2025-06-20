@@ -69,18 +69,19 @@ async def generate_or_error(state: JiraToPRState) -> Literal["generate_code", "c
         return "cleanup_state"
 
 
-async def create_pr_or_review(state: JiraToPRState) -> Literal["create_pull_requests", "cleanup_state"]:
+async def create_pr_or_review(state: JiraToPRState) -> Literal["create_pull_requests", "generate_code", "cleanup_state"]:
     """
-    Route between PR creation or cleanup based on code generation results.
+    Route between PR creation, retry code generation, or cleanup based on code generation results.
     
     This is a critical quality control decision point that determines whether
-    the generated code changes are suitable for PR creation or require cleanup.
+    the generated code changes are suitable for PR creation, need retry, or require cleanup.
     
     Args:
         state: Current workflow state with code generation results
         
     Returns:
         - "create_pull_requests": When code changes meet quality criteria
+        - "generate_code": When retrying code generation (workflow_stage is "retry_generate_code")
         - "cleanup_state": When code quality issues require human review or error occurred
     """
     print(f"\n{'='*60}")
@@ -89,6 +90,13 @@ async def create_pr_or_review(state: JiraToPRState) -> Literal["create_pull_requ
 
     # Check for errors
     print(f"state.error: {state.error}")
+    print(f"state.workflow_stage: {state.workflow_stage}")
+    
+    # Check if we should retry code generation
+    if state.workflow_stage == "retry_generate_code":
+        print("→ Routing to generate_code for retry")
+        return "generate_code"
+    
     if state.error is not None:
         print("→ Routing to cleanup_state due to error")
         return "cleanup_state"
@@ -114,6 +122,44 @@ async def create_pr_or_review(state: JiraToPRState) -> Literal["create_pull_requ
     
     print("→ Routing to create_pull_requests")
     return "create_pull_requests"
+
+
+async def pr_creation_or_retry(state: JiraToPRState) -> Literal["cleanup_state", "create_pull_requests", END]:
+    """
+    Route after PR creation attempt - continue, retry, or end.
+    
+    Args:
+        state: Current workflow state after PR creation attempt
+        
+    Returns:
+        - "cleanup_state": PR creation succeeded, continue with next ticket
+        - "create_pull_requests": Retry PR creation (workflow_stage is "retry_create_pull_requests")
+        - END: Critical error or workflow complete
+    """
+    print(f"\n{'='*60}")
+    print(f"DEBUG: pr_creation_or_retry edge function")
+    print(f"{'='*60}")
+    print(f"state.workflow_stage: {state.workflow_stage}")
+    print(f"state.error: {state.error}")
+    print(f"state.pull_requests: {len(state.pull_requests) if state.pull_requests else 0}")
+    
+    # Check if we should retry PR creation
+    if state.workflow_stage == "retry_create_pull_requests":
+        print("→ Routing to create_pull_requests for retry")
+        return "create_pull_requests"
+    
+    # Check if PRs were successfully created
+    if state.pull_requests and len(state.pull_requests) > 0:
+        print("→ Routing to cleanup_state (PRs created successfully)")
+        return "cleanup_state"
+    
+    # Check for critical errors
+    if state.error and not _is_recoverable_error(state.error):
+        print("→ Routing to END due to critical error")
+        return END
+    
+    print("→ Routing to cleanup_state (default)")
+    return "cleanup_state"
 
 
 async def continue_or_end(state: JiraToPRState) -> Literal["cleanup_state", END]:
@@ -291,7 +337,8 @@ def _is_recoverable_error(error: str) -> bool:
         "no relevant repositories",
         "code generation failed",
         "no accessible repositories",
-        "ticket analysis failed"
+        "ticket analysis failed",
+        "will retry"  # Explicit retry indicator
     ]
     
     for pattern in recoverable_patterns:
